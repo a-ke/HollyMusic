@@ -1,7 +1,8 @@
 /**
  * 音源配置管理 API（仅管理员）
- * GET  /api/admin/sources      列出音源配置 + 脚本状态
- * POST /api/admin/sources      新增音源配置 { path, name?, description?, priority?, timeout?, enabled?, pt? }
+ * GET   /api/admin/sources      列出音源配置 + 脚本状态
+ * POST  /api/admin/sources      新增音源配置 { path, name?, description?, priority?, timeout?, enabled?, pt? }
+ * PATCH /api/admin/sources      批量更新 { updates: [{ path, enabled?, pt?, priority? }] }
  */
 
 import { NextRequest } from 'next/server'
@@ -11,12 +12,15 @@ import {
   AuthError,
   ForbiddenError,
 } from '@/lib/services/user-context'
-import { addSource, listSourcesWithStatus } from '@/lib/services/source-manager-service'
+import { addSource, listSourcesWithStatus, SourceConfigError, updateSourcesBulk } from '@/lib/services/source-manager-service'
 import { logger } from '@/lib/logger'
 
 function guard(err: unknown) {
   if (err instanceof AuthError) return createErrorResponse('UNAUTHORIZED', err.message, 401)
   if (err instanceof ForbiddenError) return createErrorResponse('FORBIDDEN', err.message, 403)
+  if (err instanceof SourceConfigError) {
+    return createErrorResponse(err.statusCode === 409 ? 'CONFLICT' : 'INVALID_PARAMS', err.message, err.statusCode)
+  }
   if (err instanceof Error && err.message.includes('已存在')) {
     return createErrorResponse('CONFLICT', err.message, 409)
   }
@@ -62,5 +66,48 @@ export async function POST(request: NextRequest) {
     if (g) return g
     logger.error('[api/admin/sources POST] error:', err)
     return createErrorResponse('INTERNAL_ERROR', '新增音源失败', 500)
+  }
+}
+
+export async function PATCH(request: NextRequest) {
+  try {
+    await requireAdmin(request)
+    const body = await request.json().catch(() => ({}))
+
+    const updates = Array.isArray(body?.updates) ? body.updates : []
+    if (
+      updates.length === 0 ||
+      updates.length > 200 ||
+      !updates.every(
+        (u: { path?: unknown; enabled?: unknown; pt?: unknown; priority?: unknown }) =>
+          typeof u?.path === 'string' &&
+          u.path.trim().length > 0 &&
+          (u.enabled === undefined || typeof u.enabled === 'boolean') &&
+          (u.pt === undefined || (Array.isArray(u.pt) && u.pt.every(p => typeof p === 'string'))) &&
+          (u.priority === undefined || (typeof u.priority === 'number' && Number.isFinite(u.priority))) &&
+          (u.enabled !== undefined || u.pt !== undefined || u.priority !== undefined)
+      )
+    ) {
+      return createErrorResponse(
+        'INVALID_PARAMS',
+        '无效的 updates：需为 1–200 项数组，每项含 path 和 enabled、pt、priority 中至少一个字段',
+        400
+      )
+    }
+
+    const result = await updateSourcesBulk(
+      updates.map((u: { path: string; enabled?: boolean; pt?: string[]; priority?: number }) => ({
+        path: u.path,
+        enabled: u.enabled,
+        pt: u.pt,
+        priority: u.priority,
+      }))
+    )
+    return createSuccessResponse(result)
+  } catch (err) {
+    const g = guard(err)
+    if (g) return g
+    logger.error('[api/admin/sources PATCH] error:', err)
+    return createErrorResponse('INTERNAL_ERROR', '批量更新音源失败', 500)
   }
 }
