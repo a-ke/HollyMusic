@@ -26,9 +26,8 @@ export function PlaylistDetailPage() {
   const [showDelete, setShowDelete] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  const tracks: Track[] = (detail?.entries ?? [])
-    .filter(e => e.musicInfo)
-    .map(e => toTrack({ uid: e.songId, musicInfo: e.musicInfo! }))
+  const playableEntries = (detail?.entries ?? []).filter(e => e.musicInfo)
+  const tracks: Track[] = playableEntries.map(e => toTrack({ uid: e.songId, musicInfo: e.musicInfo! }))
 
   useEffect(() => {
     const closeMenu = (event: MouseEvent) => {
@@ -150,7 +149,14 @@ export function PlaylistDetailPage() {
             </div>
           </div>
           {tracks.length > 0 ? (
-            <SongList tracks={tracks} />
+            <SongList
+              tracks={tracks}
+              playlist={detail.username === currentUsername ? {
+                id,
+                positions: playableEntries.map(e => e.position),
+                onRemoved: reload,
+              } : undefined}
+            />
           ) : (
             <EmptyState icon={Music} title="歌单为空" description="去搜索并添加歌曲" />
           )}
