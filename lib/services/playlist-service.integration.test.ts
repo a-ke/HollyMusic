@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -25,8 +25,13 @@ let entryIds: number[]
 
 beforeAll(async () => {
   directory = await mkdtemp(path.join(tmpdir(), 'holly-playlist-'))
-  const url = `file:${path.join(directory, 'test.db')}`
-  await promisify(execFile)(path.resolve('node_modules/.bin/prisma'), [
+  const databasePath = path.join(directory, 'test.db')
+  // 预建空文件，避免 Windows 下 Prisma 初始化不存在的 SQLite 文件时报错。
+  await writeFile(databasePath, '')
+  const url = `file:${databasePath.replaceAll(path.sep, '/')}`
+  // 使用当前 Node 启动 JS 入口，避免依赖不同平台的 .bin 脚本。
+  await promisify(execFile)(process.execPath, [
+    path.resolve('node_modules/prisma/build/index.js'),
     'db', 'push', '--schema', 'prisma/schema.prisma', '--skip-generate',
   ], { env: { ...process.env, DATABASE_URL: url } })
   const actual = await vi.importActual<typeof import('../generated/prisma')>('../generated/prisma')
