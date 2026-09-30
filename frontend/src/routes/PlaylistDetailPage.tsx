@@ -17,7 +17,7 @@ import { PlaylistCover } from '@@/components/playlists/PlaylistCover'
 export function PlaylistDetailPage() {
   const { id: idStr } = useParams<{ id: string }>()
   const id = parseInt(idStr ?? '0', 10)
-  const { detail, loading, reload } = usePlaylistDetail(id)
+  const { detail, loading, error, reload } = usePlaylistDetail(id)
   const playTrack = usePlayerStore(s => s.playTrack)
   const currentUsername = useAuthStore(s => s.username)
   const navigate = useNavigate()
@@ -47,10 +47,15 @@ export function PlaylistDetailPage() {
   const handleEdit = async (name: string) => {
     try {
       await updatePlaylist(id, { name })
-      setShowEdit(false)
-      await reload()
     } catch (error) {
       alert(error instanceof Error ? error.message : '保存失败')
+      return
+    }
+    setShowEdit(false)
+    try {
+      await reload()
+    } catch {
+      alert('已保存，但刷新失败，请重试')
     }
   }
 
@@ -67,6 +72,17 @@ export function PlaylistDetailPage() {
     <div className="p-6">
       {loading ? (
         <LoadingSkeleton />
+      ) : error ? (
+        <div className="flex flex-col items-center gap-3 py-16 text-muted-foreground">
+          <p>{error}</p>
+          <button
+            type="button"
+            onClick={() => { void reload().catch(() => {}) }}
+            className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+          >
+            重试
+          </button>
+        </div>
       ) : !detail ? (
         <EmptyState icon={Music} title="歌单不存在" />
       ) : (
@@ -153,7 +169,7 @@ export function PlaylistDetailPage() {
               tracks={tracks}
               playlist={detail.username === currentUsername ? {
                 id,
-                positions: playableEntries.map(e => e.position),
+                entryIds: playableEntries.map(e => e.id),
                 onRemoved: reload,
               } : undefined}
             />

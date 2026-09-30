@@ -13,7 +13,7 @@ const OPEN_GUARD_MS = 350
 
 export interface PlaylistMenuEntry {
   playlistId: number
-  position: number
+  entryId: number
   onRemoved: () => Promise<void>
 }
 

@@ -100,11 +100,16 @@ export function SongContextMenu() {
     if (!playlistEntry) return
     dismiss()
     try {
-      await removeSongsFromPlaylist(playlistEntry.playlistId, [playlistEntry.position])
-      await playlistEntry.onRemoved()
-      toast.success('已移出歌单')
+      await removeSongsFromPlaylist(playlistEntry.playlistId, playlistEntry.entryId)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '移出歌单失败')
+      return
+    }
+    try {
+      await playlistEntry.onRemoved()
+      toast.success('已移出歌单')
+    } catch {
+      toast.warning('已移出歌单，但刷新失败，请重试')
     }
   }
 

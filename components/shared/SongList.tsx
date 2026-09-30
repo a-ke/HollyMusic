@@ -6,7 +6,7 @@ interface SongListProps {
   tracks: Track[]
   playlist?: {
     id: number
-    positions: number[]
+    entryIds: number[]
     onRemoved: () => Promise<void>
   }
 }
@@ -23,7 +23,7 @@ export function SongList({ tracks, playlist }: SongListProps) {
           index={i}
           playlistEntry={playlist ? {
             playlistId: playlist.id,
-            position: playlist.positions[i],
+            entryId: playlist.entryIds[i],
             onRemoved: playlist.onRemoved,
           } : undefined}
         />
