@@ -16,4 +16,10 @@
   root.dataset.palette = palette
   root.classList.toggle('dark', dark)
   root.style.colorScheme = dark ? 'dark' : 'light'
+  // 浏览器/PWA 标题栏在 React 和样式表加载前也使用已保存的外观。
+  var chromeColors = dark
+    ? { forest: '#19251f', blue: '#1b242e', apricot: '#2c231c' }
+    : { forest: '#f3f7f3', blue: '#f2f6fa', apricot: '#faf5ef' }
+  var themeMeta = document.querySelector('meta[name="theme-color"]')
+  if (themeMeta) themeMeta.content = chromeColors[palette]
 })()

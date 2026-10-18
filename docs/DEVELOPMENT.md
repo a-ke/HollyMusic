@@ -36,6 +36,34 @@ lx-env-simulator/ 洛雪音源兼容层
 
 浏览器通过前端调用 `/api`；开发时 Vite 代理到 Next.js，生产环境由 nginx 托管 SPA 并反代 API。`@/*` 指向仓库根目录，`@@/*` 指向 `frontend/src/`。
 
+### 首页页面缓存
+
+`frontend/src/components/CachedHomePage.tsx` 在首次访问首页后保留组件和独立滚动容器，离开时隐藏，返回同一首页地址时保留数据、榜单展开状态和滚动位置，不重新请求数据。隐藏期间冻结首页路由上下文，并禁止搜索防抖修改当前页面地址；首页筛选参数变化或手动刷新时正常请求。缓存仅在当前应用会话内有效，账号变化、进入离线模式或退出应用布局时销毁，浏览器刷新后重新加载。
+
+### 通用弹框与遮罩
+
+通用弹框使用 `components/shared/Modal.tsx`，缓存设置和外观设置已接入。组件基于原生 dialog top layer，内部使用独立 `ModalMask`，业务无需调用 `showModal()`、处理遮罩点击或自行锁定页面滚动。
+
+```tsx
+<Modal open={open} onClose={() => setOpen(false)} title="设置" size="md"
+  closeDisabled={saving}
+  footer={<button onClick={save} disabled={saving}>保存</button>}
+>
+  <SettingsForm />
+</Modal>
+```
+
+- 必填：`open`、`onClose`、`title`、`children`。`onClose` 是关闭请求，业务负责将 `open` 设为 false。
+- 内容：`description`、`eyebrow`、`footer`；尺寸 `sm / md / lg / xl`；样式可通过 `className` 和 `bodyClassName` 调整。
+- 关闭：`closeOnMaskClick`、`closeOnEscape` 默认 true；`closeDisabled` 统一禁用遮罩、Escape 和关闭按钮。自定义页脚按钮仍由业务维护 disabled。
+- 焦点：默认聚焦关闭按钮，也可传稳定的 `initialFocusRef`；Tab 在弹框内循环，关闭后恢复之前的焦点；键盘事件不会触发播放器快捷键。
+- 移动端：四边安全区留白，正文区域独立滚动，标题和页脚保持可见；跟随 Visual Viewport 调整软键盘下的高度与偏移。
+- 滚动：使用独立 body 样式和计数锁，嵌套弹框关闭内层时保留滚动锁；最后一层关闭后恢复页面位置，不覆盖其他组件的 inline overflow。
+
+支持点击遮罩关闭的弹窗、抽屉、底部操作面板，统一使用 `components/shared/ModalMask.tsx`，通过 `onClose` 传入关闭操作；`closeOnMaskClick` 默认 `true`，设为 `false` 时禁用点击遮罩关闭。原生 `<dialog>` 使用 `hooks/useMaskClickClose.ts` 返回的事件属性，第二个参数同样是 `closeOnMaskClick`，默认 `true`。不要直接给遮罩绑定关闭用的 `onClick`，也不要额外用 `mousedown` 提前关闭同一个面板。
+
+共享逻辑通过捕获阶段记录同一指针在背景上的按下和松开；从内容区选中文字拖到背景、从背景拖入内容区、指针取消均不关闭。原生 dialog 还会排除内部空白区域。关闭按钮、取消、Escape 及提交期间的业务限制由各弹窗保留。
+
 ## 本地启动
 
 ### 环境要求

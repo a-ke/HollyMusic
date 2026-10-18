@@ -21,6 +21,7 @@ import { EmptyState } from '@/components/shared/EmptyState'
 import { SourceMatrix } from '@/components/admin/SourceMatrix'
 import { toast } from '@/lib/toast'
 import { Plus, Pencil, Trash2, Music, X, Loader2, Upload, AlertCircle, CheckCircle2, FileWarning, RefreshCw, Rss, LayoutGrid, List } from 'lucide-react'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 const PLATFORMS = ['tx', 'wy', 'kw', 'kg', 'mg'] as const
 const PLATFORM_LABELS: Record<string, string> = {
@@ -506,7 +507,7 @@ function SubscriptionDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <ModalMask className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClose={onClose}>
       <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl" onClick={event => event.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-lg font-semibold"><Rss className="h-5 w-5 text-primary" />添加订阅</h3>
@@ -536,7 +537,7 @@ function SubscriptionDialog({
           </div>
         </form>
       </div>
-    </div>
+    </ModalMask>
   )
 }
 
@@ -615,7 +616,7 @@ function SourceDialog({ mode, onClose, onCreated, onUpdated }: DialogProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <ModalMask className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClose={onClose}>
       <div
         className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-card p-6 shadow-xl"
         onClick={e => e.stopPropagation()}
@@ -742,6 +743,6 @@ function SourceDialog({ mode, onClose, onCreated, onUpdated }: DialogProps) {
           </div>
         </form>
       </div>
-    </div>
+    </ModalMask>
   )
 }

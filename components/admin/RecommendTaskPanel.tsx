@@ -45,6 +45,7 @@ import {
   Sparkles,
   Undo2,
 } from 'lucide-react'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 const PLATFORMS = ['kw', 'kg', 'tx', 'wy', 'mg'] as const
 const SOURCE_SHORT: Record<string, string> = { tx: 'QQ', wy: '网易', kw: '酷我', kg: '酷狗', mg: '咪咕' }
@@ -658,9 +659,9 @@ export function RecommendTaskPanel() {
 
       {/* 重跑弹窗：可编辑全部参数 */}
       {rerun && (
-        <div
+        <ModalMask
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => !busy && setRerun(null)}
+          onClose={() => !busy && setRerun(null)}
         >
           <div
             className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-border bg-background p-5 shadow-lg"
@@ -716,14 +717,14 @@ export function RecommendTaskPanel() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalMask>
       )}
 
       {/* AI 生成名单弹窗 */}
       {genOpen && (
-        <div
+        <ModalMask
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => !genLoading && setGenOpen(false)}
+          onClose={() => !genLoading && setGenOpen(false)}
         >
           <div
             className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-lg border border-border bg-background p-5 shadow-lg"
@@ -845,7 +846,7 @@ export function RecommendTaskPanel() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalMask>
       )}
     </div>
   )

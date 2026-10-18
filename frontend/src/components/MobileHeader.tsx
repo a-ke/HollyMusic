@@ -11,6 +11,7 @@ const TITLES: Array<{ match: string; title: string }> = [
   { match: '/playlists', title: '我的歌单' },
   { match: '/favorites', title: '我的收藏' },
   { match: '/history', title: '播放历史' },
+  { match: '/offline', title: '本地歌曲' },
   { match: '/search', title: '搜索' },
   { match: '/recommend', title: '推荐' },
   { match: '/', title: '发现音乐' },

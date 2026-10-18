@@ -178,7 +178,7 @@ docker compose up -d       # 重新创建容器（数据通过 volume 保留）
 3. **静态资源强缓存** — Vite 构建产物 `/assets/` 带 hash，可一年强缓存（`/_next/static/` 同理）
 4. **`viewport-fit=cover`** — 已在 `frontend/index.html` 配置，配合 `env(safe-area-inset-*)` 适配刘海屏
 
-更新 Service Worker 后，记得更新 `public/sw.js` 中的缓存版本常量，旧缓存才会被清理。
+前端必须通过 `pnpm -C frontend build` 构建：构建脚本会根据产物内容生成 SW 版本和完整预缓存清单，无需手动修改版本。新 SW 在必需资源全部缓存成功、旧页面全部关闭后接管；更新应用壳不会删除本地歌曲。详情见 [PWA 离线使用说明](PWA-OFFLINE.md)。
 
 备份、鉴权和故障排查见[运维指南](OPERATIONS.md)。
 

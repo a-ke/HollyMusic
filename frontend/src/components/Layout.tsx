@@ -1,8 +1,11 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Home, Search, Heart, ListMusic, History, Music2, LogIn, LogOut, User, ChevronUp, Settings, KeyRound, Shuffle } from 'lucide-react'
+import { Home, Search, Heart, ListMusic, History, Music2, LogIn, LogOut, User, ChevronUp, Settings, KeyRound, Shuffle, Download } from 'lucide-react'
 import { useAuthStore } from '@/hooks/useAuth'
+import { usePwaInstall } from '@/hooks/usePwaInstall'
+import { isOfflineStorageAvailable } from '@/lib/offline-audio'
 import { AppearanceButton } from './AppearanceSettings'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 const nav = [
   { href: '/', label: '首页', icon: Home, protected: false },
@@ -11,6 +14,7 @@ const nav = [
   { href: '/favorites', label: '收藏', icon: Heart, protected: true },
   { href: '/playlists', label: '歌单', icon: ListMusic, protected: true },
   { href: '/history', label: '历史', icon: History, protected: true },
+  { href: '/offline', label: '本地', icon: Music2, protected: true },
 ]
 
 interface ContentProps {
@@ -28,6 +32,7 @@ function NavLink({
   icon: Icon,
   isProtected,
   authenticated,
+  disabled,
   onNavigate,
 }: {
   href: string
@@ -35,11 +40,17 @@ function NavLink({
   icon: typeof Home
   isProtected: boolean
   authenticated: boolean | null
+  disabled: boolean
   onNavigate?: () => void
 }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const active = pathname === href
+  if (disabled) return (
+    <span role="link" aria-disabled="true" title="联网后可用" className="relative flex min-h-11 cursor-not-allowed items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground opacity-40">
+      <Icon className="h-5 w-5" />{label}
+    </span>
+  )
 
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     onNavigate?.()
@@ -75,9 +86,13 @@ function NavLink({
 function SidebarContent({ onNavigate }: ContentProps) {
   const navigate = useNavigate()
   const authenticated = useAuthStore(s => s.authenticated)
-  const username = useAuthStore(s => s.username)
+  const offlineUsername = useAuthStore(s => s.offlineUsername)
+  const username = useAuthStore(s => s.offlineUsername ?? s.username)
   const logout = useAuthStore(s => s.logout)
   const [menuOpen, setMenuOpen] = useState(false)
+  const canCacheSongs = isOfflineStorageAvailable()
+  const canInstall = usePwaInstall(s => s.canInstall)
+  const install = usePwaInstall(s => s.install)
 
   const handleLogout = async () => {
     setMenuOpen(false)
@@ -105,7 +120,7 @@ function SidebarContent({ onNavigate }: ContentProps) {
         <span className="text-base font-bold tracking-tight">Holly Music</span>
       </div>
       <nav className="flex shrink-0 flex-col gap-1">
-        {nav.map(item => (
+        {nav.filter(item => item.href !== '/offline' || canCacheSongs).map(item => (
           <div key={item.href}>
             {item.href === '/favorites' && <p className="mb-3 mt-7 px-3 text-[11px] font-medium tracking-widest text-muted-foreground">我的音乐</p>}
             <NavLink
@@ -114,6 +129,7 @@ function SidebarContent({ onNavigate }: ContentProps) {
               icon={item.icon}
               isProtected={item.protected}
               authenticated={authenticated}
+              disabled={!!offlineUsername && item.href !== '/offline'}
               onNavigate={onNavigate}
             />
           </div>
@@ -122,7 +138,7 @@ function SidebarContent({ onNavigate }: ContentProps) {
 
       <div className="relative mt-auto border-t border-border/60 px-1 pt-3">
         <AppearanceButton />
-        {authenticated === true ? (
+        {authenticated === true || offlineUsername ? (
           <>
             <button
               onClick={() => setMenuOpen(v => !v)}
@@ -131,16 +147,26 @@ function SidebarContent({ onNavigate }: ContentProps) {
             >
               <span className="flex min-w-0 items-center gap-2">
                 <User className="h-4 w-4 shrink-0" />
-                <span className="truncate">{username}</span>
+                <span className="truncate">{username}{offlineUsername && <span className="ml-2 inline-flex items-center gap-1 text-xs text-muted-foreground"><span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />离线</span>}</span>
               </span>
               <ChevronUp className={`h-4 w-4 shrink-0 transition-transform ${menuOpen ? '' : 'rotate-180'}`} />
             </button>
             {menuOpen && (
               <div className="absolute bottom-full left-0 right-0 mb-1 rounded-md border border-border bg-popover p-1 shadow-lg">
+                {canInstall && (
+                  <button
+                    onClick={() => { void install(); setMenuOpen(false); onNavigate?.() }}
+                    className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Download className="h-5 w-5" />
+                    安装应用
+                  </button>
+                )}
                 {username === 'admin' && (
                   <button
                     onClick={goAdmin}
-                    className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    disabled={!!offlineUsername}
+                    className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <Settings className="h-5 w-5" />
                     系统管理
@@ -148,14 +174,16 @@ function SidebarContent({ onNavigate }: ContentProps) {
                 )}
                 <button
                   onClick={goChangePassword}
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  disabled={!!offlineUsername}
+                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <KeyRound className="h-5 w-5" />
                   修改密码
                 </button>
                 <button
                   onClick={handleLogout}
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  disabled={!!offlineUsername}
+                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <LogOut className="h-5 w-5" />
                   登出
@@ -193,11 +221,11 @@ export function Sidebar() {
 export function MobileSidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <div className="desktop:hidden">
-      <div
+      <ModalMask
         className={`safe-screen fixed inset-0 z-40 bg-black/50 transition-opacity duration-300 ${
           open ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
-        onClick={onClose}
+        onClose={onClose}
         aria-hidden={!open}
       />
       <aside

@@ -1,10 +1,14 @@
 import { useEffect } from 'react'
+import { logger } from '@/lib/logger'
+import { registerPwaInstall } from '@/hooks/usePwaInstall'
 
 /**
  * Service Worker 注册（Vite SPA 版）。
  * 同 Next.js 版逻辑，仅去掉 'use client' 指令。
  */
 export function ServiceWorkerRegister() {
+  useEffect(() => registerPwaInstall(), [])
+
   useEffect(() => {
     if (process.env.NODE_ENV !== 'production') return
     if (typeof window === 'undefined') return
@@ -14,7 +18,7 @@ export function ServiceWorkerRegister() {
       navigator.serviceWorker
         .register('/sw.js', { scope: '/' })
         .catch((err) => {
-          console.warn('[SW] 注册失败:', err)
+          logger.warn('[SW] 注册失败:', err)
         })
     }
 

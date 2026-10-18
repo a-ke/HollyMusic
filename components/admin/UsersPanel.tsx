@@ -16,6 +16,7 @@ import { LoadingSkeleton } from '@/components/shared/LoadingSkeleton'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Plus, Pencil, Trash2, Shield, X, Loader2, KeyRound } from 'lucide-react'
 import { useAuthStore } from '@/hooks/useAuth'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 type DialogMode =
   | { kind: 'create' }
@@ -262,7 +263,7 @@ function UserDialog({ mode, onClose, onCreated, onUpdated, onPasswordChanged }: 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <ModalMask className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClose={onClose}>
       <div
         className="w-full max-w-sm rounded-lg bg-card p-6 shadow-xl"
         onClick={e => e.stopPropagation()}
@@ -320,6 +321,6 @@ function UserDialog({ mode, onClose, onCreated, onUpdated, onPasswordChanged }: 
           </div>
         </form>
       </div>
-    </div>
+    </ModalMask>
   )
 }

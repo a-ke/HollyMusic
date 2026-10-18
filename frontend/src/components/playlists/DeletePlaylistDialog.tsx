@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { X } from 'lucide-react'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 interface Props {
   playlistName: string
@@ -21,7 +22,7 @@ export function DeletePlaylistDialog({ playlistName, onClose, onConfirm }: Props
   }
 
   return (
-    <div className="safe-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <ModalMask className="safe-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClose={onClose}>
       <div className="safe-dialog w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-xl" onClick={event => event.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">删除歌单</h2>
@@ -44,6 +45,6 @@ export function DeletePlaylistDialog({ playlistName, onClose, onConfirm }: Props
           </button>
         </div>
       </div>
-    </div>
+    </ModalMask>
   )
 }

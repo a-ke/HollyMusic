@@ -8,12 +8,13 @@ import { create } from 'zustand'
 import { toTrack, type Track, type PlaybackMode } from '@/lib/types/player'
 import type { QualityType } from '@/lib/types/music'
 import { buildAudioUrl, getTrackByUid } from '@/lib/api/music'
-import { resolveQuality, nextLowerQuality } from '@/lib/quality-options'
+import { resolveQuality, nextLowerQuality, VALID_QUALITIES } from '@/lib/quality-options'
 import { detectCodecCap, capQuality } from '@/lib/codec-support'
 import { reportPlay } from '@/lib/api/history'
 import { useAuthStore } from '@/hooks/useAuth'
 import { logger } from '@/lib/logger'
 import { loadPlayerPreferences, playerPreferencesStorage, type PlaybackSession, type PlayerTabState } from '@/lib/player-storage'
+import { getOfflineAudio } from '@/lib/offline-audio'
 
 /** 原生元数据就绪前使用曲目信息，避免有已知时长却显示 0:00。 */
 function initialDuration(track: Track): number {
@@ -21,9 +22,9 @@ function initialDuration(track: Track): number {
 }
 
 /** 仅在已登录时上报播放历史，匿名跳过（/api/history 受保护） */
-function reportPlayIfAuthed(musicInfo: Track['musicInfo']) {
-  if (useAuthStore.getState().authenticated) {
-    reportPlay(musicInfo).catch(() => {})
+function reportPlayIfAuthed(track: Track) {
+  if (track.playback?.source !== 'local' && useAuthStore.getState().authenticated) {
+    reportPlay(track.musicInfo).catch(() => {})
   }
 }
 
@@ -35,6 +36,8 @@ const DEGRADABLE_ERR_CODES = new Set([3, 4])
 // ---- 睡眠定时器（句柄放模块级，避免进 store 触发重渲染）----
 let sleepTimerHandle: ReturnType<typeof setTimeout> | null = null
 const SLEEP_STEPS = [15, 30, 45, 60] // 分钟
+let streamRequestId = 0
+let playbackCommandId = 0
 
 interface PlayerStore {
   // 队列与当前
@@ -84,18 +87,18 @@ interface PlayerStore {
   isLyricsOpen: boolean
 
   // 核心动作
-  playTrack: (track: Track, queue?: Track[]) => Promise<void>
-  loadStreamUrl: (track: Track, forceQuality?: QualityType, options?: { startTime?: number; autoplay?: boolean }) => Promise<void>
+  playTrack: (track: Track, queue?: Track[], options?: { offline?: boolean; quality?: QualityType }) => Promise<void>
+  loadStreamUrl: (track: Track, forceQuality?: QualityType, options?: { startTime?: number; autoplay?: boolean; offline?: boolean }) => Promise<void>
   /** 只恢复显示状态；用户点击播放时才加载音频，不计入一次新播放。 */
   restorePlayback: (session: PlaybackSession | null) => void
   /** 通过 uid 反查并播放（分享链接 ?uid= 自动播放用） */
   playByUid: (uid: string) => Promise<void>
   togglePlay: () => void
-  setIsPlaying: (v: boolean) => void
+  setIsPlaying: (v: boolean, options?: { fromAudio?: boolean }) => void
   setCurrentTime: (t: number) => void
   setDuration: (d: number) => void
   setBufferProgress: (v: number | null) => void
-  handleTrackError: (msg: string, errCode?: number, wasPlaying?: boolean) => void
+  handleTrackError: (msg: string, errCode?: number, wasPlaying?: boolean) => Promise<void>
   seek: (t: number) => void
   setVolume: (v: number) => void
   toggleMute: () => void
@@ -155,12 +158,14 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   isQueueOpen: false,
   isLyricsOpen: false,
 
-  playTrack: async (track, newQueue) => {
+  playTrack: async (track, newQueue, options) => {
     if (newQueue && newQueue.length > 0) {
-      const idx = newQueue.findIndex(t => t.uid === track.uid)
+      const idx = newQueue.findIndex(t => t.uid === track.uid && t.playback?.source === track.playback?.source
+        && t.playback?.quality === track.playback?.quality)
       set({ queue: newQueue, currentIndex: idx >= 0 ? idx : 0 })
     } else {
-      const existing = get().queue.findIndex(t => t.uid === track.uid)
+      const existing = get().queue.findIndex(t => t.uid === track.uid && t.playback?.source === track.playback?.source
+        && t.playback?.quality === track.playback?.quality)
       if (existing >= 0) {
         set({ currentIndex: existing })
       } else {
@@ -168,8 +173,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       }
     }
     set({ currentTrack: track, isCurrentTempPlay: false, currentTime: 0, duration: initialDuration(track), urlFetchError: null })
-    await get().loadStreamUrl(track)
-    reportPlayIfAuthed(track.musicInfo)
+    await get().loadStreamUrl(track, options?.quality, { offline: options?.offline })
+    if (!options?.offline) reportPlayIfAuthed(track)
   },
 
   restorePlayback: (session) => {
@@ -179,21 +184,55 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   },
 
   loadStreamUrl: async (track, forceQuality?, options?) => {
+    const requestId = ++streamRequestId
+    const commandId = playbackCommandId
+    const seekNonce = get().seekNonce
+    set({ isFetchingUrl: true, bufferProgress: null })
     // 前端按歌曲支持范围就近降级，URL 带准确音质 → 缓存键准确、UI 如实显示。
     // 服务端 getMusicUrl 仍保留降级作音源级兜底。
     // forceQuality：解码失败降级重试时强制指定（绕过用户偏好），见 handleTrackError。
     // codecCap：浏览器能力上限（启动 canPlayType 探测），把已知解不了的格式压掉，
     //          避免对不支持 FLAC 的浏览器反复请求 FLAC。
-    const resolved = forceQuality ?? resolveQuality(get().quality, track.musicInfo.types)
+    const resolved = forceQuality ?? track.playback?.quality ?? resolveQuality(get().quality, track.musicInfo.types)
     const eff = capQuality(resolved, get().codecCap)
+    const auth = useAuthStore.getState()
+    const localPlayback = track.playback?.source === 'local'
+    const offline = !!(localPlayback || options?.offline || auth.offlineUsername || (typeof navigator !== 'undefined' && !navigator.onLine))
+    const username = auth.offlineUsername ?? auth.username
+    let local: Awaited<ReturnType<typeof getOfflineAudio>> = null
+    try {
+      // uid 包含渠道与歌曲 ID；在线仅命中相同音质，离线保留可播放音质回退。
+      if (username) local = await getOfflineAudio(username, track.uid, eff,
+        offline && !localPlayback ? VALID_QUALITIES.filter(q => capQuality(q, get().codecCap) === q
+          && (!forceQuality || VALID_QUALITIES.indexOf(q) <= VALID_QUALITIES.indexOf(forceQuality))) : [eff])
+    } catch { /* 在线读取失败继续请求服务端；离线时显示未缓存。 */ }
+    const currentAuth = useAuthStore.getState()
+    if (requestId !== streamRequestId || get().currentTrack?.uid !== track.uid
+      || username !== (currentAuth.offlineUsername ?? currentAuth.username)) {
+      if (local) URL.revokeObjectURL(local.url)
+      return
+    }
+    // 用户在缓存读取期间发出的暂停/播放和拖动指令优先于请求开始时的选项。
+    const autoplay = commandId === playbackCommandId ? options?.autoplay ?? true : get().isPlaying
+    const startTime = seekNonce === get().seekNonce ? options?.startTime ?? 0 : get().currentTime
+    if (local) {
+      set({ streamUrl: local.url, streamNonce: get().streamNonce + 1, effectiveQuality: local.quality,
+        seekTarget: null, currentTime: startTime, isFetchingUrl: false,
+        isPlaying: autoplay, bufferProgress: null, urlFetchError: null })
+      return
+    }
+    if (offline) {
+      set({ streamUrl: null, isPlaying: false, isFetchingUrl: false, urlFetchError: '此歌曲尚未完整缓存，请联网播放后重试' })
+      return
+    }
     set({
       streamUrl: buildAudioUrl(track.uid, eff),
       streamNonce: get().streamNonce + 1,
       seekTarget: null,
-      currentTime: options?.startTime ?? 0,
+      currentTime: startTime,
       effectiveQuality: eff,
       isFetchingUrl: false,
-      isPlaying: options?.autoplay ?? true,
+      isPlaying: autoplay,
       bufferProgress: null,
     })
   },
@@ -209,7 +248,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   },
   // 不在此处重置 errorRetryCount：解码失败常是「播一瞬间就挂」，play 事件已触发会把计数清零，
   // 导致连续失败上限永远达不到 → 无限循环跳歌。改由 setCurrentTime 在播放稳定(>5s)时重置。
-  setIsPlaying: (v) => {
+  setIsPlaying: (v, options) => {
+    if (!options?.fromAudio) playbackCommandId++
     const { currentTrack, streamUrl, currentTime } = get()
     if (v && currentTrack && !streamUrl) {
       void get().loadStreamUrl(currentTrack, undefined, { startTime: currentTime })
@@ -224,11 +264,41 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     if (Number.isFinite(d) && d > 0) set({ duration: d })
   },
   setBufferProgress: (v) => set({ bufferProgress: v }),
-  handleTrackError: (msg, errCode?, wasPlaying = get().isPlaying) => {
+  handleTrackError: async (msg, errCode?, wasPlaying = get().isPlaying) => {
     // 暂停加载/恢复时遇到错误不能自动出声或跳歌；保留歌曲与位置供用户重试。
     if (!wasPlaying) {
       set({ urlFetchError: msg, isPlaying: false, streamUrl: null, bufferProgress: null })
       return
+    }
+    const { currentTrack, effectiveQuality, streamUrl } = get()
+    const offline = typeof navigator !== 'undefined' && !navigator.onLine
+    if (currentTrack && effectiveQuality && streamUrl?.startsWith('/api/audio?')
+      && (errCode === 2 || (offline && errCode !== 1))) {
+      const requestId = ++streamRequestId
+      const commandId = playbackCommandId
+      const auth = useAuthStore.getState()
+      const username = auth.offlineUsername ?? auth.username
+      let local: Awaited<ReturnType<typeof getOfflineAudio>> = null
+      try {
+        if (username) local = await getOfflineAudio(username, currentTrack.uid, effectiveQuality, [effectiveQuality])
+      } catch { /* 缓存不可用时继续原有错误处理，不重复请求网络音频。 */ }
+      const currentAuth = useAuthStore.getState()
+      if (requestId !== streamRequestId || get().currentTrack?.uid !== currentTrack.uid
+        || username !== (currentAuth.offlineUsername ?? currentAuth.username)) {
+        if (local) URL.revokeObjectURL(local.url)
+        return
+      }
+      // 音频错误会上报暂停；仅后续用户命令可以改变恢复时的播放意图。
+      const autoplay = commandId === playbackCommandId ? wasPlaying : get().isPlaying
+      if (local) {
+        set({ streamUrl: local.url, streamNonce: get().streamNonce + 1, effectiveQuality: local.quality,
+          seekTarget: null, isFetchingUrl: false, isPlaying: autoplay, bufferProgress: null, urlFetchError: null })
+        return
+      }
+      if (!autoplay) {
+        set({ urlFetchError: msg, isPlaying: false, streamUrl: null, bufferProgress: null })
+        return
+      }
     }
     // 解码/格式不支持 → 仅对当前这首歌降一档重试（手机 WebView 常解不了 FLAC，降到 MP3 即可播）。
     // 降到最低档仍失败，才走下面的跳歌逻辑。网络错误(2)不降级（换格式无意义）。
@@ -299,7 +369,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     const track = queue[nextIndex]
     set({ currentIndex: nextIndex, currentTrack: track, isCurrentTempPlay: false, currentTime: 0, duration: initialDuration(track) })
     get().loadStreamUrl(track)
-    reportPlayIfAuthed(track.musicInfo)
+    reportPlayIfAuthed(track)
   },
 
   previous: () => {
@@ -317,7 +387,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     const track = queue[prevIndex]
     set({ currentIndex: prevIndex, currentTrack: track, isCurrentTempPlay: false, currentTime: 0, duration: initialDuration(track) })
     get().loadStreamUrl(track)
-    reportPlayIfAuthed(track.musicInfo)
+    reportPlayIfAuthed(track)
   },
 
   handleTrackEnd: () => {
@@ -369,7 +439,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       duration: initialDuration(track),
     })
     get().loadStreamUrl(track)
-    reportPlayIfAuthed(track.musicInfo)
+    reportPlayIfAuthed(track)
   },
   removeFromQueue: (index) =>
     set(s => {
@@ -384,6 +454,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
           return { queue: newQueue, currentIndex: s.currentIndex - 1 }
         }
         // 移除当前曲目：清空播放状态（顺带修预存 bug——原实现留下指向已移除曲目的 streamUrl）
+        streamRequestId++
         return {
           queue: newQueue,
           currentIndex: -1,
@@ -391,12 +462,14 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
           effectiveQuality: null,
           streamUrl: null,
           isPlaying: false,
+          isFetchingUrl: false,
           bufferProgress: null,
         }
       }
       return { queue: newQueue }
     }),
-  clearQueue: () =>
+  clearQueue: () => {
+    streamRequestId++
     set({
       queue: [],
       playNextQueue: [],
@@ -414,7 +487,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       seekTarget: null,
       effectiveQuality: null,
       bufferProgress: null,
-    }),
+    })
+  },
 
   toggleQueue: () => set(s => ({ isQueueOpen: !s.isQueueOpen })),
   setQueueOpen: (v) => set({ isQueueOpen: v }),

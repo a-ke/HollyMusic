@@ -8,6 +8,7 @@ import {
 } from '@/lib/api/playlists'
 import { X, Plus, Check } from 'lucide-react'
 import { CreatePlaylistDialog } from './CreatePlaylistDialog'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 interface Props {
   uid: string
@@ -45,7 +46,7 @@ export function AddToPlaylistDialog({ uid, onClose }: Props) {
   }
 
   return (
-    <div className="safe-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <ModalMask className="safe-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClose={onClose}>
       <div
         className="safe-dialog w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-xl"
         onClick={e => e.stopPropagation()}
@@ -97,6 +98,6 @@ export function AddToPlaylistDialog({ uid, onClose }: Props) {
           />
         )}
       </div>
-    </div>
+    </ModalMask>
   )
 }

@@ -29,6 +29,7 @@ import {
   X,
   FileQuestion,
 } from 'lucide-react'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 export function CachePanel() {
   const [stats, setStats] = useState<CacheStats | null>(null)
@@ -336,9 +337,9 @@ export function CachePanel() {
 
       {/* 孤儿扫描结果弹窗 */}
       {orphanResult && (
-        <div
+        <ModalMask
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-          onClick={() => setOrphanResult(null)}
+          onClose={() => setOrphanResult(null)}
         >
           <div
             className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-lg bg-card p-6 shadow-xl"
@@ -393,7 +394,7 @@ export function CachePanel() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalMask>
       )}
     </div>
   )

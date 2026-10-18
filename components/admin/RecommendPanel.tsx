@@ -44,6 +44,7 @@ import {
   ArrowUpDown,
   KeyRound,
 } from 'lucide-react'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 const PLATFORMS = ['kw', 'kg', 'tx', 'wy', 'mg'] as const
 const ALL_SOURCES: SourceType[] = ['kw', 'kg', 'tx', 'wy', 'mg']
@@ -875,9 +876,9 @@ export function RecommendPanel() {
 
       {/* ── AI 辅助弹窗 ── */}
       {aiOpen && (
-        <div
+        <ModalMask
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => !busy && !aiLoading && setAiOpen(false)}
+          onClose={() => !busy && !aiLoading && setAiOpen(false)}
         >
           <div
             className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-border bg-background p-5 shadow-lg"
@@ -1029,7 +1030,7 @@ export function RecommendPanel() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalMask>
       )}
     </div>
   )
