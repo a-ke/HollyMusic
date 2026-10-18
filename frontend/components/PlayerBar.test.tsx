@@ -6,6 +6,7 @@ import { usePlayerStore } from '@/lib/store/player-store'
 import { toTrack } from '@/lib/types/player'
 import { useAuthStore } from '@/hooks/useAuth'
 import * as offlineAudio from '@/lib/offline-audio'
+import * as playbackResponse from '@/lib/playback-response'
 
 // 保留真实的 PC/手机按钮、进度条、store 和音频 hook，只隔离附属服务与音频硬件。
 vi.mock('@/hooks/useMediaSession', () => ({ useMediaSession: () => {} }))
@@ -99,6 +100,37 @@ afterEach(async () => {
 })
 
 describe('PC 与移动端共用播放器', () => {
+  it.each(['pause-and-seek', 'switch-track'])('等待 SW 登记期间仍尊重用户的 %s 操作', async action => {
+    const auth = useAuthStore.getState()
+    let resolve!: (ready: boolean) => void
+    const cancel = vi.fn()
+    const capture = { ready: new Promise<boolean>(done => { resolve = done }), response: Promise.resolve(null), cancel, cached: vi.fn() }
+    vi.spyOn(playbackResponse, 'preparePlaybackResponse').mockReturnValueOnce(capture).mockReturnValue(null)
+    try {
+      await act(async () => {
+        useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null, loading: false, mustChangePassword: false })
+        await usePlayerStore.getState().playTrack(second, [track, second])
+      })
+      expect(audio.src).toBe('')
+      await act(async () => {
+        if (action === 'pause-and-seek') {
+          usePlayerStore.getState().setIsPlaying(false)
+          usePlayerStore.getState().seek(75)
+        } else await usePlayerStore.getState().playTrack(track, [track, second])
+      })
+      await act(async () => { resolve(true) })
+      await ready()
+      if (action === 'pause-and-seek') {
+        expect(audio.src).toContain('kw-second')
+        expect(audio.currentTime).toBe(75)
+        expect(audio.paused).toBe(true)
+      } else {
+        expect(audio.src).toContain('kw-first')
+        expect(cancel).toHaveBeenCalled()
+      }
+    } finally { await act(async () => { useAuthStore.setState(auth, true) }) }
+  })
+
   it.each(['reconnect', 'same-state'])('同账号认证成功后重新触发当前歌曲缓存（%s），不重新加载音频', async mode => {
     const auth = useAuthStore.getState()
     vi.useFakeTimers()

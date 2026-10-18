@@ -63,7 +63,7 @@ interface AuthStore {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
 }
 
-export const useAuthStore = create<AuthStore>((set) => ({
+export const useAuthStore = create<AuthStore>((set, get) => ({
   sessionRevision: 0,
   offlineUsername: null,
   authenticated: null,
@@ -82,7 +82,10 @@ export const useAuthStore = create<AuthStore>((set) => ({
       if (typeof navigator !== 'undefined' && !navigator.onLine) throw new TypeError('设备已离线')
       const me = await getMe()
       if (requestId !== authRequestId) return
-      cancelOfflineDownloads()
+      // 同账号校验成功时保留当前完整下载与排队任务；换号/失效才撤销。
+      const previous = get()
+      if (!me.authenticated || !me.username || me.mustChangePassword
+        || !previous.authenticated || previous.username !== me.username) cancelOfflineDownloads()
       if (me.authenticated && me.username && !me.mustChangePassword) offlineIdentity.write(me.username)
       else offlineIdentity.remove()
       set(state => ({ authenticated: me.authenticated, username: me.username, mustChangePassword: me.mustChangePassword,
@@ -124,7 +127,8 @@ export const useAuthStore = create<AuthStore>((set) => ({
   login: async (username, password) => {
     ++authRequestId
     const res = await apiLogin(username, password)
-    cancelOfflineDownloads()
+    const previous = get()
+    if (!previous.authenticated || previous.username !== res.username || res.mustChangePassword) cancelOfflineDownloads()
     if (!res.mustChangePassword) offlineIdentity.write(res.username)
     else offlineIdentity.remove()
     set({ authenticated: true, username: res.username, offlineUsername: null, mustChangePassword: res.mustChangePassword, error: null })

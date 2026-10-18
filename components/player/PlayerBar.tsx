@@ -5,7 +5,8 @@ import { useAudioPlayer } from '@/hooks/useAudioPlayer'
 import { useMediaSession } from '@/hooks/useMediaSession'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 import { useAuthStore } from '@/hooks/useAuth'
-import { cachePlayedTrack } from '@/lib/offline-audio'
+import { cachePlayedTrack, getOfflineCacheLimit } from '@/lib/offline-audio'
+import { preparePlaybackResponse, type PlaybackResponseCapture } from '@/lib/playback-response'
 import { NowPlaying } from './NowPlaying'
 import { PlayerControls } from './PlayerControls'
 import { PlayerTools } from './PlayerTools'
@@ -34,13 +35,15 @@ export function PlayerBar({ audio, onAudioElement }: PlayerBarProps) {
   const mustChangePassword = useAuthStore(s => s.mustChangePassword)
   const sessionRevision = useAuthStore(s => s.sessionRevision)
 
-  const loadedRef = useRef<{ url: string; nonce: number; uid: string; username: string | null } | null>(null)
+  const loadedRef = useRef<{ url: string; nonce: number; uid: string; username: string | null; pending?: boolean } | null>(null)
+  const captureRef = useRef<PlaybackResponseCapture | null>(null)
+  useEffect(() => () => { captureRef.current?.cancel() }, [])
 
   // 读取缓存或 React 尚未提交新音频源时，旧 Audio 的事件不能写入新曲目的状态。
   const isCurrentStream = () => {
     const state = usePlayerStore.getState()
     const loaded = loadedRef.current
-    return !state.isFetchingUrl && !!state.streamUrl && loaded?.url === state.streamUrl
+    return !state.isFetchingUrl && !!state.streamUrl && !loaded?.pending && loaded?.url === state.streamUrl
       && loaded.nonce === state.streamNonce && loaded.uid === state.currentTrack?.uid
   }
 
@@ -72,6 +75,7 @@ export function PlayerBar({ audio, onAudioElement }: PlayerBarProps) {
     // Zustand 通知同步执行：切歌开始就使旧引擎失效，不等待缓存结果或 React effect。
     if (loadedRef.current && (state.currentTrack?.uid !== loadedRef.current.uid || !state.streamUrl)) {
       loadedRef.current = null
+      captureRef.current?.cancel()
       unload()
     }
   }), [unload])
@@ -106,6 +110,7 @@ export function PlayerBar({ audio, onAudioElement }: PlayerBarProps) {
     const currentTrack = usePlayerStore.getState().currentTrack
     if (!streamUrl || !currentTrack) {
       loadedRef.current = null
+      captureRef.current?.cancel()
       unload()
       return
     }
@@ -114,13 +119,29 @@ export function PlayerBar({ audio, onAudioElement }: PlayerBarProps) {
       const auth = useAuthStore.getState()
       loadedRef.current = { url: streamUrl, nonce: streamNonce, uid: currentTrack.uid,
         username: auth.offlineUsername ?? auth.username }
-      if (previous?.url === streamUrl && isReady) {
+      if (previous?.url === streamUrl && !previous.pending && isReady) {
         // 同源重播复用已有缓冲；单曲循环在后台也不依赖 rAF 或布尔值翻转。
         seek(usePlayerStore.getState().currentTime)
         if (isPlaying) void play()
         else void pause()
       } else {
-        void load(streamUrl, isPlaying, usePlayerStore.getState().currentTime)
+        captureRef.current?.cancel()
+        const capture = auth.authenticated && auth.username && !auth.loading && !auth.mustChangePassword
+          && navigator.onLine
+          ? preparePlaybackResponse(auth.username, streamUrl, getOfflineCacheLimit(auth.username)) : null
+        captureRef.current = capture
+        if (capture) {
+          const loaded = loadedRef.current
+          loaded.pending = true
+          void capture.ready.then(() => {
+            if (loadedRef.current !== loaded) return
+            loaded.pending = false
+            const state = usePlayerStore.getState()
+            void load(streamUrl, state.isPlaying, state.currentTime)
+          })
+        } else {
+          void load(streamUrl, isPlaying, usePlayerStore.getState().currentTime)
+        }
       }
       return
     }
@@ -130,7 +151,7 @@ export function PlayerBar({ audio, onAudioElement }: PlayerBarProps) {
       void pause()
       return
     }
-    if (isReady) void play()
+    if (isReady && !loadedRef.current?.pending) void play()
   }, [streamUrl, streamNonce, isPlaying, isFetchingUrl, isReady, load, unload, play, pause, seek])
 
   useEffect(() => {
@@ -144,7 +165,7 @@ export function PlayerBar({ audio, onAudioElement }: PlayerBarProps) {
   // seek 指令 → 跳转
   useEffect(() => {
     const t = usePlayerStore.getState().seekTarget
-    if (t != null && !usePlayerStore.getState().isFetchingUrl && usePlayerStore.getState().streamUrl) seek(t)
+    if (t != null && !loadedRef.current?.pending && !usePlayerStore.getState().isFetchingUrl && usePlayerStore.getState().streamUrl) seek(t)
   }, [seekNonce, seek])
 
   return (

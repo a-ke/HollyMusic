@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useAuthStore } from '@/hooks/useAuth'
 import { offlineIdentity } from '@/lib/offline-audio'
+import * as offlineAudio from '@/lib/offline-audio'
 import { getMe, logout } from '@/lib/api/auth'
 
 vi.mock('@/lib/api/auth', () => ({
@@ -70,4 +71,15 @@ it('同账号重复认证成功也更新版本，失败时不触发成功版本'
   vi.mocked(getMe).mockRejectedValue(new TypeError('offline'))
   await useAuthStore.getState().init()
   expect(useAuthStore.getState().sessionRevision).toBe(revision + 1)
+})
+
+it.each(['same-account', 'different-account', 'expired', 'must-change-password'])('重新认证 %s 时按身份决定是否取消当前下载', async scenario => {
+  useAuthStore.setState({ authenticated: true, username: 'alice', mustChangePassword: false })
+  const cancel = vi.spyOn(offlineAudio, 'cancelOfflineDownloads')
+  vi.mocked(getMe).mockResolvedValue({ authenticated: scenario !== 'expired',
+    username: scenario === 'expired' ? null : scenario === 'different-account' ? 'bob' : 'alice',
+    mustChangePassword: scenario === 'must-change-password',
+    setupRequired: false, setupRecoveryRequired: false, setupTokenRequired: false })
+  await useAuthStore.getState().init()
+  expect(cancel).toHaveBeenCalledTimes(scenario === 'same-account' ? 0 : 1)
 })

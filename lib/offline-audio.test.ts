@@ -2,6 +2,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cachePlayedTrack, cancelOfflineDownloads, clearOfflineTracks, getOfflineAudio, listOfflineTracks,
   CACHE_MB, OFFLINE_DEFAULT_LIMIT_BYTES, getOfflineCacheLimit, setOfflineCacheLimit, planOfflineCleanup } from './offline-audio'
 import { toTrack } from './types/player'
+import { preparePlaybackResponse } from './playback-response'
+import { useAuthStore } from '@/hooks/useAuth'
+import * as authApi from '@/lib/api/auth'
 
 function memoryCaches() {
   const stores = new Map<string, Map<string, Response>>()
@@ -12,7 +15,10 @@ function memoryCaches() {
       const key = (input: string | Request) => typeof input === 'string' ? input : input.url
       return {
         match: async (input: string | Request) => store.get(key(input))?.clone(),
-        put: async (input: string | Request, response: Response) => { store.set(key(input), response.clone()) },
+        put: async (input: string | Request, response: Response) => {
+          const bytes = await response.arrayBuffer()
+          store.set(key(input), new Response(bytes, { status: response.status, headers: response.headers }))
+        },
         keys: async () => [...store.keys()].map(url => new Request(url)),
         delete: async (input: string | Request) => store.delete(key(input)),
       }
@@ -58,6 +64,146 @@ it('已缓存歌曲不重复下载；相同歌曲不同音质分别保存', asyn
   expect(fetch).toHaveBeenCalledTimes(1)
   await cachePlayedTrack('alice', track('1'), '128k')
   expect(await listOfflineTracks('alice')).toHaveLength(2)
+})
+
+it('从播放响应保存离线歌曲，不再发起第二次 fetch', async () => {
+  let port!: MessagePort
+  vi.stubGlobal('navigator', { onLine: true, serviceWorker: { controller: {
+    postMessage: (_data: unknown, ports: MessagePort[]) => { port = ports[0]; port.postMessage({ type: 'ready' }) },
+  } } })
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', OFFLINE_DEFAULT_LIMIT_BYTES)!
+  expect(await capture.ready).toBe(true)
+  const caching = cachePlayedTrack('alice', track('1'), '320k')
+  port.postMessage({ type: 'complete', blob: new Blob(['abcd']),
+    headers: { 'content-type': 'audio/mpeg', 'content-length': '4' } })
+  await caching
+  expect(fetch).not.toHaveBeenCalled()
+  expect(await listOfflineTracks('alice')).toHaveLength(1)
+  const released = new Promise<MessageEvent>(resolve => { port.onmessage = event => { if (event.data.type === 'cancel') resolve(event) } })
+  capture.cancel()
+  expect((await released).data).toEqual({ type: 'cancel' })
+  port.close()
+})
+
+it('从分块清单流式落盘后确认释放，并以磁盘指针替换页面完成响应', async () => {
+  let port!: MessagePort
+  let captureId = ''
+  const commands: string[] = []
+  vi.stubGlobal('navigator', { onLine: true, serviceWorker: { controller: {
+    postMessage: (data: { type: string; captureId: string }, ports?: MessagePort[]) => {
+      commands.push(data.type)
+      if (ports?.[0]) { captureId = data.captureId; port = ports[0]; port.postMessage({ type: 'ready' }) }
+    },
+  } } })
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', OFFLINE_DEFAULT_LIMIT_BYTES)!
+  try {
+    await capture.ready
+    const temporary = await caches.open('holly-playback-data-v1')
+    const base = `https://holly.test/__playback_data/alice-tab/${captureId}/`
+    await temporary.put(base + '0', new Response('ab', { headers: { 'content-length': '2' } }))
+    await temporary.put(base + '1', new Response('cd', { headers: { 'content-length': '2' } }))
+    await temporary.put(base + 'complete', new Response(JSON.stringify({ version: 1, size: 4,
+      headers: { 'content-type': 'audio/mpeg', 'content-length': '4' },
+      chunks: [{ key: base + '0', length: 2 }, { key: base + '1', length: 2 }],
+    })))
+    const acknowledged = new Promise<MessageEvent>(resolve => { port.onmessage = event => { if (event.data.type === 'cached') resolve(event) } })
+    const caching = cachePlayedTrack('alice', track('1'), '320k')
+    port.postMessage({ type: 'complete', cacheName: 'holly-playback-data-v1', cacheKey: base + 'complete' })
+    await caching
+    await acknowledged
+    expect(commands).toContain('holly-cached-audio')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(await listOfflineTracks('alice')).toHaveLength(1)
+    for (const request of await temporary.keys()) await temporary.delete(request)
+    expect(await (await capture.response)!.text()).toBe('abcd')
+    const cache = await caches.open('holly-audio-v1:alice')
+    const key = (await listOfflineTracks('alice'))[0].key
+    const previous = await cache.match(key)
+    await cache.put(key, new Response('WXYZ', { headers: previous!.headers }))
+    // 再次读取必须来自持久缓存，不能从页面原先的完成 Promise/Blob 返回旧字节。
+    expect(await (await capture.response)!.text()).toBe('WXYZ')
+  } finally { capture.cancel(); port.close() }
+})
+
+it('下载尚未完成时同账号重新认证，原缓存任务仍复用同一响应并成功落盘', async () => {
+  let port!: MessagePort
+  vi.stubGlobal('navigator', { onLine: true, serviceWorker: { controller: {
+    postMessage: (_data: unknown, ports: MessagePort[]) => { port = ports[0]; port.postMessage({ type: 'ready' }) },
+  } } })
+  vi.spyOn(authApi, 'getMe').mockResolvedValue({ authenticated: true, username: 'alice', mustChangePassword: false,
+    setupRequired: false, setupRecoveryRequired: false, setupTokenRequired: false })
+  useAuthStore.setState({ authenticated: true, username: 'alice', loading: false, mustChangePassword: false })
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', OFFLINE_DEFAULT_LIMIT_BYTES)!
+  try {
+    await capture.ready
+    const caching = cachePlayedTrack('alice', track('1'), '320k')
+    await useAuthStore.getState().init()
+    const duplicate = cachePlayedTrack('alice', track('1'), '320k')
+    port.postMessage({ type: 'complete', blob: new Blob(['abcd']),
+      headers: { 'content-type': 'audio/mpeg', 'content-length': '4' } })
+    await Promise.all([caching, duplicate])
+    expect(fetch).not.toHaveBeenCalled()
+    expect(await listOfflineTracks('alice')).toHaveLength(1)
+  } finally {
+    capture.cancel()
+    port.close()
+    await useAuthStore.getState().logout()
+    useAuthStore.setState(useAuthStore.getInitialState(), true)
+  }
+})
+
+it.each(['cancel', 'unavailable'])('播放捕获 %s 时跳过缓存，不额外下载且不阻塞后续任务', async reason => {
+  let port!: MessagePort
+  vi.stubGlobal('navigator', { onLine: true, serviceWorker: { controller: {
+    postMessage: (_data: unknown, ports: MessagePort[]) => { port = ports[0]; port.postMessage({ type: 'ready' }) },
+  } } })
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', OFFLINE_DEFAULT_LIMIT_BYTES)!
+  await capture.ready
+  const caching = cachePlayedTrack('alice', track('1'), '320k')
+  if (reason === 'cancel') cancelOfflineDownloads()
+  else port.postMessage({ type: 'unavailable' })
+  await caching
+  expect(fetch).not.toHaveBeenCalled()
+  expect(await listOfflineTracks('alice')).toEqual([])
+  await cachePlayedTrack('alice', track('2'), '320k')
+  expect(await listOfflineTracks('alice')).toHaveLength(1)
+  port.close()
+})
+
+it('旧 Service Worker 不响应握手时及时回退原有缓存方式', async () => {
+  let port!: MessagePort
+  vi.stubGlobal('navigator', { onLine: true, serviceWorker: { controller: {
+    postMessage: (_data: unknown, ports: MessagePort[]) => { port = ports[0] },
+  } } })
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', OFFLINE_DEFAULT_LIMIT_BYTES)!
+  expect(await capture.ready).toBe(false)
+  await cachePlayedTrack('alice', track('1'), '320k')
+  expect(fetch).toHaveBeenCalledTimes(1)
+  port.close()
+})
+
+it('页面等待缓存超过 5 分钟只发送 cancel-cache，仍保留播放源用于后续主动释放', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  let port!: MessagePort
+  const commands: Array<{ type: string; preservePlayback?: boolean }> = []
+  vi.stubGlobal('navigator', { onLine: true, serviceWorker: { controller: {
+    postMessage: (data: { type: string; preservePlayback?: boolean }, ports?: MessagePort[]) => {
+      commands.push(data)
+      if (ports?.[0]) { port = ports[0]; port.postMessage({ type: 'ready' }) }
+    },
+  } } })
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', OFFLINE_DEFAULT_LIMIT_BYTES)!
+  try {
+    await capture.ready
+    const stopped = new Promise<MessageEvent>(resolve => { port.onmessage = resolve })
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect((await stopped).data).toEqual({ type: 'cancel-cache' })
+    expect(await capture.response).toBeNull()
+    expect(commands.at(-1)).toMatchObject({ type: 'holly-release-audio', preservePlayback: true })
+    const released = new Promise<MessageEvent>(resolve => { port.onmessage = resolve })
+    capture.cancel()
+    expect((await released).data).toEqual({ type: 'cancel' })
+  } finally { capture.cancel(); port.close(); vi.useRealTimers() }
 })
 
 it.each([
@@ -161,7 +307,7 @@ it.each(['QuotaExceededError', 'UnknownError'])('写入新歌曲失败（%s）�
   const deleted = vi.spyOn(cache, 'delete')
   vi.mocked(window.dispatchEvent).mockClear()
   await cachePlayedTrack('alice', track('new'), '320k')
-  expect(deleted).not.toHaveBeenCalled()
+  expect(deleted.mock.calls.filter(([key]) => String(key).includes('/__offline_audio/'))).toEqual([])
   expect((await listOfflineTracks('alice')).map(item => item.track.uid)).toEqual(['kw-recent', 'kw-old'])
   expect(window.dispatchEvent).not.toHaveBeenCalled()
 })
@@ -174,13 +320,15 @@ it('新歌曲写入期间取消，只移除新歌曲，旧歌曲完整保留且�
   const put = cache.put.bind(cache)
   vi.spyOn(cache, 'put').mockImplementation(async (key, response) => {
     await put(key, response)
-    cancelOfflineDownloads()
+    if (String(key).includes('/__offline_audio/')) cancelOfflineDownloads()
   })
   const deleted = vi.spyOn(cache, 'delete')
   vi.mocked(window.dispatchEvent).mockClear()
   await cachePlayedTrack('alice', track('new'), '320k')
   expect((await listOfflineTracks('alice')).map(item => item.track.uid)).toEqual(['kw-recent', 'kw-old'])
-  expect(deleted).toHaveBeenCalledExactlyOnceWith('https://holly.test/__offline_audio/kw-new/320k')
+  expect(deleted.mock.calls.filter(([key]) => String(key).includes('/__offline_audio/'))).toEqual([
+    ['https://holly.test/__offline_audio/kw-new/320k'],
+  ])
   expect(window.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'holly-offline-changed' }))
 })
 
@@ -231,8 +379,8 @@ it('读取淘汰计划期间取消，不写入新歌曲，也不删除旧歌曲'
   const put = vi.spyOn(cache, 'put')
   const remove = vi.spyOn(cache, 'delete')
   await cachePlayedTrack('alice', track('new'), '320k')
-  expect(put).not.toHaveBeenCalled()
-  expect(remove).not.toHaveBeenCalled()
+  expect(put.mock.calls.filter(([key]) => String(key).includes('/__offline_audio/'))).toEqual([])
+  expect(remove.mock.calls.filter(([key]) => String(key).includes('/__offline_audio/'))).toEqual([])
   expect(await listOfflineTracks('alice')).toHaveLength(2)
 })
 

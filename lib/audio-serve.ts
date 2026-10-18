@@ -685,6 +685,10 @@ class AudioServe {
     if (ct) headers['Content-Type'] = ct
     const cl = resp.headers.get('content-length')
     if (cl) headers['Content-Length'] = cl
+    for (const name of ['Content-Range', 'Accept-Ranges', 'ETag', 'Last-Modified']) {
+      const value = resp.headers.get(name)
+      if (value) headers[name] = value
+    }
     return new Response(resp.body, { status: resp.status, headers })
   }
 

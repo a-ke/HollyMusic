@@ -1,8 +1,10 @@
 import { buildAudioUrl } from '@/lib/api/music'
-import { createBrowserStorage } from '@/lib/browser-storage'
+import { createBrowserStorage, isCacheStorageAvailable as isOfflineStorageAvailable } from '@/lib/browser-storage'
 import { parseTrack } from '@/lib/player-storage'
 import { VALID_QUALITIES } from '@/lib/quality-options'
 import { logger } from '@/lib/logger'
+import { cancelPlaybackResponses, getPlaybackResponse, markPlaybackCached } from '@/lib/playback-response'
+import { getOfflineAudioCacheName as cacheName, getOfflineAudioCacheKey as audioKey } from '@/lib/offline-audio-keys'
 import type { Track } from '@/lib/types/player'
 import type { QualityType } from '@/lib/types/music'
 
@@ -10,7 +12,6 @@ export const OFFLINE_CHANGED = 'holly-offline-changed'
 export const CACHE_MB = 1_000_000
 export const OFFLINE_MIN_LIMIT_BYTES = 100 * CACHE_MB
 export const OFFLINE_DEFAULT_LIMIT_BYTES = 500 * CACHE_MB
-const PREFIX = 'holly-audio-v1:'
 
 // 仅作为本机离线资料的入口，不作为服务端登录凭据。
 export const offlineIdentity = createBrowserStorage<string>('holly-offline-user', value =>
@@ -75,13 +76,7 @@ export async function setOfflineCacheLimit(username: string, limit: number, appr
   })
 }
 
-export function isOfflineStorageAvailable(): boolean {
-  return typeof window !== 'undefined' && window.isSecureContext && 'caches' in window
-}
-function cacheName(username: string): string { return PREFIX + encodeURIComponent(username) }
-function audioKey(uid: string, quality: QualityType): string {
-  return new URL(`/__offline_audio/${encodeURIComponent(uid)}/${quality}`, window.location.origin).href
-}
+export { isOfflineStorageAvailable }
 function changed(): void { window.dispatchEvent(new Event(OFFLINE_CHANGED)) }
 async function withCacheLock<T>(action: () => Promise<T>): Promise<T> {
   return navigator.locks ? navigator.locks.request('holly-offline-audio', action) : action()
@@ -112,8 +107,50 @@ let pending = Promise.resolve()
 let generation = 0
 const queued = new Map<string, number>()
 const controllers = new Set<AbortController>()
+let nextStagingSweep = 0
+
+async function cleanupOldStaging(cache: Cache): Promise<void> {
+  const now = Date.now()
+  if (now < nextStagingSweep) return
+  nextStagingSweep = now + 30 * 60_000
+  for (const request of await cache.keys()) {
+    const match = new URL(request.url).pathname.match(/^\/__offline_stage\/(\d+)-/)
+    if (match && Number(match[1]) < now - 30 * 60_000) await cache.delete(request)
+  }
+}
+
+/** Cache.put 流式消费并校验总长度；失败时原子写入不提交，不构造整首 Blob。 */
+function verifiedAudioBody(response: Response, length: number, signal: AbortSignal, epoch: number): ReadableStream<Uint8Array> {
+  if (!response.body) throw new Error('音频响应缺少数据')
+  const reader = response.body.getReader()
+  let received = 0
+  const stop = () => { signal.removeEventListener('abort', abort); void reader.cancel().catch(() => {}) }
+  const abort = () => { void reader.cancel().catch(() => {}) }
+  signal.addEventListener('abort', abort, { once: true })
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        if (signal.aborted || epoch !== generation) throw new Error('缓存已取消')
+        const { value, done } = await reader.read()
+        if (signal.aborted || epoch !== generation) throw new Error('缓存已取消')
+        if (done) {
+          if (received !== length) throw new Error('音频下载不完整')
+          stop()
+          controller.close()
+          return
+        }
+        received += value.byteLength
+        if (received > length) throw new Error('音频超过声明大小')
+        controller.enqueue(value)
+      } catch (error) { stop(); controller.error(error) }
+    },
+    cancel: stop,
+  })
+}
+
 export function cancelOfflineDownloads(): void {
   generation++
+  cancelPlaybackResponses()
   controllers.forEach(controller => controller.abort())
   controllers.clear()
 }
@@ -128,10 +165,14 @@ export function cachePlayedTrack(username: string, track: Track, quality: Qualit
   // 同一代任务去重；已取消但尚未结束的任务不能挡住恢复联网后的重试。
   if (queued.get(job) === epoch) return pending
   queued.set(job, epoch)
+  // 在排队前固定本次播放响应；之后的切歌/重播不能替换任务的数据来源。
+  const playbackResponse = getPlaybackResponse(username, buildAudioUrl(track.uid, quality))
   const task = async () => {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 5 * 60_000)
     controllers.add(controller)
+    let staging: Cache | null = null
+    let stagingKey: string | null = null
     try {
       if (epoch !== generation) return
       const cache = await caches.open(cacheName(username))
@@ -142,11 +183,16 @@ export function cachePlayedTrack(username: string, track: Track, quality: Qualit
           const headers = new Headers(existing.headers)
           headers.set('x-holly-used', String(Date.now()))
           await cache.put(key, new Response(existing.body, { headers }))
+          markPlaybackCached(username, buildAudioUrl(track.uid, quality))
         })
         return
       }
       // 不带 Range，只有 200 完整音频才入库；浏览器流缓冲不等于离线缓存。
-      const response = await fetch(buildAudioUrl(track.uid, quality), { signal: controller.signal, cache: 'no-store' })
+      const response = playbackResponse
+        ? await playbackResponse
+        : await fetch(buildAudioUrl(track.uid, quality), { signal: controller.signal, cache: 'no-store' })
+      // 已接管的播放流失败或只有局部数据时跳过缓存，不再额外下载整首。
+      if (!response) return
       const type = response.headers.get('content-type') || ''
       const length = Number(response.headers.get('content-length'))
       if (response.status !== 200 || !/^(audio\/|application\/octet-stream)/i.test(type)
@@ -154,32 +200,49 @@ export function cachePlayedTrack(username: string, track: Track, quality: Qualit
         await response.body?.cancel()
         return
       }
-      const blob = await response.blob()
-      if (blob.size !== length || epoch !== generation) return
+      let storedResponse = response
+      if (!playbackResponse) {
+        // 无 SW 时先在锁外流式暂存完整响应，避免慢速下载长期占用清理锁。
+        staging = await caches.open('holly-offline-staging-v1')
+        await cleanupOldStaging(staging)
+        stagingKey = new URL(`/__offline_stage/${Date.now()}-${crypto.randomUUID()}`, window.location.origin).href
+        await staging.put(stagingKey, new Response(verifiedAudioBody(response, length, controller.signal, epoch), { headers: response.headers }))
+        const staged = await staging.match(stagingKey)
+        if (!staged) return
+        storedResponse = staged
+      }
+      if (epoch !== generation || controller.signal.aborted) return
       await withCacheLock(async () => {
         if (epoch !== generation) return
         // 下载期间设置可能已在其他标签页变更，提交前重新读取；超大单曲不清理已有缓存。
         const limit = getOfflineCacheLimit(username)
-        if (blob.size > limit) return
+        if (length > limit) return
         const entries = (await listOfflineTracks(username)).filter(entry => entry.key !== key)
-        const cleanup = planOfflineCleanup(entries, limit, blob.size)
+        const cleanup = planOfflineCleanup(entries, limit, length)
         if (epoch !== generation || controller.signal.aborted) return
-        const headers = new Headers({ 'content-type': type, 'content-length': String(blob.size),
+        const headers = new Headers({ 'content-type': type, 'content-length': String(length), 'x-holly-verified-size': String(length),
           'x-holly-track': encodeURIComponent(JSON.stringify(storedTrack)), 'x-holly-quality': quality,
           'x-holly-used': String(Date.now()) })
+        for (const name of ['etag', 'last-modified']) {
+          const value = response.headers.get(name)
+          if (value) headers.set(name, value)
+        }
         let written = false
+        let committed = false
         try {
           // 先写入，配额/存储失败时保留全部旧歌曲，不通过预先删除来重试。
-          await cache.put(key, new Response(blob, { headers }))
+          await cache.put(key, new Response(verifiedAudioBody(storedResponse, length, controller.signal, epoch), { headers }))
           written = true
           if (epoch !== generation || controller.signal.aborted) {
             await cache.delete(key)
             return
           }
+          committed = true
           // 从此处开始提交淘汰：即使任务被取消，也保留新歌曲并完成清理。
           // 清空缓存等后续操作会等待同一把锁，不能在删掉旧歌曲后再回滚新歌曲。
           for (const entry of cleanup.entries) await cache.delete(entry.key)
         } finally {
+          if (committed) markPlaybackCached(username, buildAudioUrl(track.uid, quality))
           // 清理失败或取消后也要刷新，避免列表展示已被删除的条目。
           if (written) changed()
         }
@@ -187,6 +250,8 @@ export function cachePlayedTrack(username: string, track: Track, quality: Qualit
     } catch (error) {
       if (!controller.signal.aborted) logger.warn('[offline] 歌曲缓存失败，不影响在线播放', error)
     } finally {
+      controller.abort()
+      if (staging && stagingKey) await staging.delete(stagingKey).catch(() => {})
       clearTimeout(timeout)
       controllers.delete(controller)
       if (queued.get(job) === epoch) queued.delete(job)

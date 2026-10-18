@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { logger } from '@/lib/logger'
+import { isCacheStorageAvailable } from '@/lib/browser-storage'
 import { registerPwaInstall } from '@/hooks/usePwaInstall'
 
 /**
@@ -10,13 +11,13 @@ export function ServiceWorkerRegister() {
   useEffect(() => registerPwaInstall(), [])
 
   useEffect(() => {
-    if (process.env.NODE_ENV !== 'production') return
-    if (typeof window === 'undefined') return
+    if (!isCacheStorageAvailable()) return
     if (!('serviceWorker' in navigator)) return
 
     const register = () => {
       navigator.serviceWorker
-        .register('/sw.js', { scope: '/' })
+        .register(process.env.NODE_ENV === 'development' ? '/sw.js?mode=development' : '/sw.js', { scope: '/' })
+        .then(registration => registration.active?.postMessage({ type: 'holly-prune-audio' }))
         .catch((err) => {
           logger.warn('[SW] 注册失败:', err)
         })
