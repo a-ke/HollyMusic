@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, Music, Play, RefreshCw } from 'lucide-react'
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -24,26 +24,35 @@ export function DiscoveryCollectionPage({ kind }: { kind: 'toplists' | 'playlist
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const playTrack = usePlayerStore(s => s.playTrack)
+  const requestId = useRef(0)
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const currentRequest = ++requestId.current
     setLoading(true)
     setError(null)
     try {
       const result = kind === 'toplists' ? await getToplistDetail(source, id) : await getRecommendedPlaylistDetail(source, id)
-      setDetail(result)
+      if (currentRequest !== requestId.current) return
+      // 大歌单的列表更新允许被歌词开关等即时交互打断。
+      startTransition(() => {
+        setDetail(result)
+        setLoading(false)
+      })
     } catch (err) {
+      if (currentRequest !== requestId.current) return
       setDetail(null)
       setError(err instanceof Error ? err.message : '加载失败')
-    } finally {
       setLoading(false)
     }
-  }
+  }, [id, kind, source])
 
   useEffect(() => {
-    void load()
-    // id / kind 变化时重新请求；load 是本组件内函数，无需作为依赖项。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, kind, source])
+    const activeRequest = requestId
+    let cancelled = false
+    // StrictMode 重建时取消首轮尚未发出的请求，避免重复下载整张歌单。
+    void Promise.resolve().then(() => { if (!cancelled) return load() })
+    return () => { cancelled = true; activeRequest.current++ }
+  }, [load])
 
   const tracks = useMemo(() => (detail?.tracks ?? []).map(song => toTrack({ uid: song.uid, musicInfo: song })), [detail])
 

@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `holly-player-preferences` | localStorage | 音量、静音、播放模式、音质；设备级偏好，跨标签页同步 |
 | `holly-player-session:<账号>` | localStorage + sessionStorage | 主队列、插播队列、当前曲目、主队列游标、插播标志、进度 |
-| `holly-player-tab:<账号>` | sessionStorage | 睡眠定时器截止时间、歌词和队列面板展开状态 |
+| `holly-player-tab:<账号>` | sessionStorage | 睡眠定时器截止时间、队列面板展开状态 |
 
 同一标签页刷新优先读取自己的 sessionStorage 副本；没有副本时读取本地账号记录。歌曲和队列不监听其他标签页的实时更新。空闲标签页关闭时不会把旧位置重新写成最新记录。
 
@@ -33,3 +33,5 @@
 新增偏好时，同时更新偏好类型、默认值、校验器和 store 保存字段。新增播放会话字段时，同时更新快照类型、校验器、恢复动作及保存条件；不要持久化整个 store。改变存储结构需要显式增加版本并提供迁移策略。
 
 回归测试位于 `frontend/hooks/player-persistence.test.ts`、`frontend/hooks/usePlayerPersistence.test.tsx`、`frontend/components/PlayerBar.test.tsx` 和 `frontend/components/SearchPage.test.tsx`，覆盖存储故障、旧设置迁移、账号隔离、刷新恢复、插播顺序、定时器及 URL 导航。
+
+歌词面板展开状态由 URL 中的 `lyrics=1` 控制，不写入播放器存储。首次进入应用（包括刷新或直接打开链接）会立即替换 URL 移除 `lyrics` 参数，不判断歌曲和登录状态；应用内打开与前进后退仍由参数控制。

@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { getPlaylist, type PlaylistDetail } from '@/lib/api/playlists'
 
 export function usePlaylistDetail(id: number | null) {
@@ -19,7 +19,8 @@ export function usePlaylistDetail(id: number | null) {
     try {
       const detail = await getPlaylist(id)
       if (currentId.current === id && requestId.current === currentRequest) {
-        setState({ id, detail, loading: false, error: null })
+        // 大歌单的数据渲染允许被歌词、播放按钮等用户交互打断。
+        startTransition(() => setState({ id, detail, loading: false, error: null }))
       }
     } catch (error) {
       if (currentId.current === id && requestId.current === currentRequest) {

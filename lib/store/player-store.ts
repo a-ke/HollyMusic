@@ -40,6 +40,8 @@ let streamRequestId = 0
 let playbackCommandId = 0
 
 interface PlayerStore {
+  /** 当前已完成播放记录恢复的账号；仅内存，用于等待会话初始化。 */
+  restoredForUsername: string | null
   // 队列与当前
   queue: Track[]
   /** 手动插播队列（"下一首播放"插队头 / "加入队列"排队尾）。
@@ -84,7 +86,6 @@ interface PlayerStore {
 
   // UI 面板
   isQueueOpen: boolean
-  isLyricsOpen: boolean
 
   // 核心动作
   playTrack: (track: Track, queue?: Track[], options?: { offline?: boolean; quality?: QualityType }) => Promise<void>
@@ -122,8 +123,6 @@ interface PlayerStore {
   // UI
   toggleQueue: () => void
   setQueueOpen: (v: boolean) => void
-  toggleLyrics: () => void
-  setLyricsOpen: (v: boolean) => void
 
   // 睡眠定时器
   cycleSleepTimer: () => void
@@ -132,6 +131,7 @@ interface PlayerStore {
 }
 
 export const usePlayerStore = create<PlayerStore>((set, get) => ({
+  restoredForUsername: null,
   queue: [],
   playNextQueue: [],
   isCurrentTempPlay: false,
@@ -156,7 +156,6 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   seekNonce: 0,
 
   isQueueOpen: false,
-  isLyricsOpen: false,
 
   playTrack: async (track, newQueue, options) => {
     if (newQueue && newQueue.length > 0) {
@@ -180,7 +179,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   restorePlayback: (session) => {
     get().clearQueue()
     set({ ...(session ?? {}), duration: session?.currentTrack ? initialDuration(session.currentTrack) : 0,
-      isQueueOpen: false, isLyricsOpen: false })
+      isQueueOpen: false })
   },
 
   loadStreamUrl: async (track, forceQuality?, options?) => {
@@ -492,8 +491,6 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
 
   toggleQueue: () => set(s => ({ isQueueOpen: !s.isQueueOpen })),
   setQueueOpen: (v) => set({ isQueueOpen: v }),
-  toggleLyrics: () => set(s => ({ isLyricsOpen: !s.isLyricsOpen })),
-  setLyricsOpen: (v) => set({ isLyricsOpen: v }),
 
   cycleSleepTimer: () => {
     const cur = get().sleepTimer

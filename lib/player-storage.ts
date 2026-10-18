@@ -22,7 +22,6 @@ export interface PlaybackSession {
 export interface PlayerTabState {
   sleepTimer: { minutes: number; expiresAt: number } | null
   isQueueOpen: boolean
-  isLyricsOpen: boolean
 }
 
 export const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
@@ -129,7 +128,7 @@ function parseTabState(value: unknown): PlayerTabState | null {
     && typeof timer.expiresAt === 'number' && Number.isFinite(timer.expiresAt)
     && timer.expiresAt > Date.now() && timer.expiresAt <= Date.now() + 60 * 60_000
     ? { minutes: timer.minutes, expiresAt: timer.expiresAt } : null
-  return { sleepTimer, isQueueOpen: value.isQueueOpen === true, isLyricsOpen: value.isLyricsOpen === true }
+  return { sleepTimer, isQueueOpen: value.isQueueOpen === true }
 }
 
 export function playbackSessionStorage(username: string, area: StorageArea = 'local') {

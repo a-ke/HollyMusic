@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { usePlaylistDetail } from '@/hooks/usePlaylistDetail'
 import { useAuthStore } from '@/hooks/useAuth'
@@ -26,8 +26,13 @@ export function PlaylistDetailPage() {
   const [showDelete, setShowDelete] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  const playableEntries = (detail?.entries ?? []).filter(e => e.musicInfo)
-  const tracks: Track[] = playableEntries.map(e => toTrack({ uid: e.songId, musicInfo: e.musicInfo! }))
+  const playableEntries = useMemo(() => (detail?.entries ?? []).filter(e => e.musicInfo), [detail?.entries])
+  const tracks = useMemo<Track[]>(() => playableEntries.map(e => toTrack({ uid: e.songId, musicInfo: e.musicInfo! })), [playableEntries])
+  const playlist = useMemo(() => detail?.username === currentUsername ? {
+    id,
+    entryIds: playableEntries.map(e => e.id),
+    onRemoved: reload,
+  } : undefined, [detail?.username, currentUsername, id, playableEntries, reload])
 
   useEffect(() => {
     const closeMenu = (event: MouseEvent) => {
@@ -167,12 +172,9 @@ export function PlaylistDetailPage() {
           </div>
           {tracks.length > 0 ? (
             <SongList
+              key={id}
               tracks={tracks}
-              playlist={detail.username === currentUsername ? {
-                id,
-                entryIds: playableEntries.map(e => e.id),
-                onRemoved: reload,
-              } : undefined}
+              playlist={playlist}
             />
           ) : (
             <EmptyState icon={Music} title="歌单为空" description="去搜索并添加歌曲" />

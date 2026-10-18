@@ -178,9 +178,12 @@ describe('播放会话', () => {
 describe('睡眠定时器与面板', () => {
   it('刷新按截止时间恢复，并在剩余时间结束时暂停', () => {
     playbackSessionStorage('alice').write(snapshot)
-    playerTabStorage('alice').write({ sleepTimer: { minutes: 15, expiresAt: Date.now() + 8000 }, isQueueOpen: true, isLyricsOpen: true })
+    const legacySettings = { sleepTimer: { minutes: 15, expiresAt: Date.now() + 8000 }, isQueueOpen: true, isLyricsOpen: true }
+    playerTabStorage('alice').write(legacySettings)
     stop = startPlayerSession('alice')
-    expect(usePlayerStore.getState()).toMatchObject({ isQueueOpen: true, isLyricsOpen: true })
+    expect(usePlayerStore.getState()).toMatchObject({ isQueueOpen: true })
+    expect(playerTabStorage('alice').read()).not.toHaveProperty('isLyricsOpen')
+    expect(usePlayerStore.getState()).not.toHaveProperty('isLyricsOpen')
     usePlayerStore.getState().togglePlay()
     vi.advanceTimersByTime(7999)
     expect(usePlayerStore.getState().isPlaying).toBe(true)

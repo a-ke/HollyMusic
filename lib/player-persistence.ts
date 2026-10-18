@@ -15,10 +15,10 @@ export function startPlayerSession(username: string): () => void {
   usePlayerStore.getState().restorePlayback(session)
   const settings = tabSettings.read()
   usePlayerStore.getState().setSleepTimer(settings?.sleepTimer ?? null)
-  usePlayerStore.setState({ isQueueOpen: settings?.isQueueOpen ?? false,
-    isLyricsOpen: !!session?.currentTrack && (settings?.isLyricsOpen ?? false) })
+  usePlayerStore.setState({ isQueueOpen: settings?.isQueueOpen ?? false })
   // 固定本标签页的初始副本，不让其他标签页之后的写入影响刷新恢复。
   tab.write(session ?? { queue: [], playNextQueue: [], currentTrack: null, currentIndex: -1, isCurrentTempPlay: false, currentTime: 0 })
+  usePlayerStore.setState({ restoredForUsername: username })
 
   let dirty = false
   let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -36,12 +36,11 @@ export function startPlayerSession(username: string): () => void {
     dirty = false
   }
   const saveSettings = () => {
-    const { sleepTimer, isQueueOpen, isLyricsOpen } = usePlayerStore.getState()
-    tabSettings.write({ sleepTimer, isQueueOpen, isLyricsOpen })
+    const { sleepTimer, isQueueOpen } = usePlayerStore.getState()
+    tabSettings.write({ sleepTimer, isQueueOpen })
   }
   const unsubscribe = usePlayerStore.subscribe((state, previous) => {
-    if (state.sleepTimer !== previous.sleepTimer || state.isQueueOpen !== previous.isQueueOpen
-      || state.isLyricsOpen !== previous.isLyricsOpen) saveSettings()
+    if (state.sleepTimer !== previous.sleepTimer || state.isQueueOpen !== previous.isQueueOpen) saveSettings()
     const structureChanged = state.queue !== previous.queue || state.playNextQueue !== previous.playNextQueue
       || state.currentTrack !== previous.currentTrack || state.currentIndex !== previous.currentIndex
       || state.isCurrentTempPlay !== previous.isCurrentTempPlay
@@ -59,6 +58,7 @@ export function startPlayerSession(username: string): () => void {
   return () => {
     save()
     unsubscribe()
+    usePlayerStore.setState({ restoredForUsername: null })
     window.removeEventListener('pagehide', save)
     document.removeEventListener('visibilitychange', onVisibility)
     // 退出/切换账号后不再保留旧账号的定时任务。

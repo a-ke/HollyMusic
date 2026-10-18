@@ -7,6 +7,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '@/lib/store/player-store'
+import { useLyricsPanel } from '@/hooks/useLyricsPanel'
 import { useFavoritesStore } from '@/lib/store/favorites-store'
 import { shareContent, buildSongShareUrl } from '@/lib/share'
 import { toast } from '@/lib/toast'
@@ -29,7 +30,7 @@ export function MobilePlayerMenu() {
   const currentTrack = usePlayerStore(s => s.currentTrack)
   const previous = usePlayerStore(s => s.previous)
   const next = usePlayerStore(s => s.next)
-  const toggleLyrics = usePlayerStore(s => s.toggleLyrics)
+  const { toggle: toggleLyrics } = useLyricsPanel()
   const isFav = useFavoritesStore(s => currentTrack ? s.ids.has(currentTrack.uid) : false)
   const toggleFavorite = useFavoritesStore(s => s.toggle)
   const sleepTimer = usePlayerStore(s => s.sleepTimer)

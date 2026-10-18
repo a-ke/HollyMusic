@@ -20,6 +20,8 @@ import { useSearchStore } from '@/lib/store/search-store'
 import { useContextMenuStore } from '@/lib/store/context-menu-store'
 import { useAuthStore } from '@/hooks/useAuth'
 import { usePlayerPersistence } from '@/hooks/usePlayerPersistence'
+import { LyricsPanelContext } from '@/hooks/useLyricsPanel'
+import { useLyricsHistory } from './hooks/useLyricsHistory'
 import { CachedHomePage } from './components/CachedHomePage'
 import { DiscoveryCollectionPage } from './routes/DiscoveryCollectionPage'
 import { RecommendedMusicPage } from './routes/RecommendedMusicPage'
@@ -29,12 +31,12 @@ import { PlaylistsPage } from './routes/PlaylistsPage'
 import { PlaylistDetailPage } from './routes/PlaylistDetailPage'
 import { AiPlaylistPage } from './routes/AiPlaylistPage'
 import { HistoryPage } from './routes/HistoryPage'
+import { AdminPage, AdminUsersPage, AdminSourcesPage, AdminRecommendPage } from './routes/AdminPage'
+import { OfflinePage } from './routes/OfflinePage'
 import { LoginPage } from './routes/LoginPage'
 import { SetupPage } from './routes/SetupPage'
 import { AuthLayout } from './components/AuthLayout'
 import { ChangePasswordPage } from './routes/ChangePasswordPage'
-import { AdminPage, AdminUsersPage, AdminSourcesPage, AdminRecommendPage } from './routes/AdminPage'
-import { OfflinePage } from './routes/OfflinePage'
 
 export function App() {
   const location = useLocation()
@@ -51,7 +53,9 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   // 播放引擎只创建一张原生 Audio；传给底栏与歌词详情共用同一分析对象。
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null)
-  usePlayerPersistence()
+  const playbackReady = usePlayerPersistence()
+  const autoPlayRef = useRef(false)
+  const lyricsPanel = useLyricsHistory(playbackReady)
 
   // 包括浏览器前进/后退；强制关闭，避免刚打开菜单时的 close 保护期。
   useEffect(() => {
@@ -94,7 +98,6 @@ export function App() {
   // 分享链接 ?uid= 自动播放 / ?playlist= 跳歌单详情（各只触发一次）。
   // 等登录完成后由 location 驱动：未登录时守卫会先拦去登录页（携带 redirect），
   // 登录回跳后 location 变化，在此接续——提前触发只会静默 401，且 ref 置位会导致回跳后不再播放。
-  const autoPlayRef = useRef(false)
   const playlistRef = useRef(false)
   useEffect(() => {
     if (authenticated !== true) return
@@ -116,7 +119,9 @@ export function App() {
   useEffect(() => {
     if (authenticated === null || setupRequired === true || location.pathname === '/setup') return
     if (authenticated === false && location.pathname !== '/login') {
-      const from = location.pathname + location.search
+      const params = new URLSearchParams(location.search)
+      params.delete('lyrics')
+      const from = location.pathname + (params.size ? `?${params}` : '')
       navigate(`/login?redirect=${encodeURIComponent(from)}`, { replace: true })
     }
   }, [authenticated, setupRequired, location.pathname, location.search, navigate])
@@ -181,44 +186,46 @@ export function App() {
   }
 
   return (
-    <div className="app-atmosphere app-viewport flex h-dvh flex-col text-foreground">
-      <MobileHeader onMenuClick={() => setDrawerOpen(true)} />
-      <div className="flex min-h-0 flex-1 overflow-hidden desktop:gap-3 desktop:px-3 desktop:pt-3">
-        <Sidebar />
-        <div className="app-main-frame flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          {!offlineUsername && <CachedHomePage key={username} />}
-          <main hidden={!offlineUsername && location.pathname === '/'} className="app-main min-h-0 min-w-0 flex-1 overflow-y-auto" tabIndex={0} aria-label="页面内容">
-            {offlineUsername ? <Routes>
-              <Route path="/offline" element={<OfflinePage />} />
-              <Route path="*" element={<Navigate to="/offline" replace />} />
-            </Routes> : <Routes>
-              <Route path="/offline" element={<OfflinePage />} />
-              <Route path="/" element={null} />
-              <Route path="/recommend" element={<RecommendedMusicPage />} />
-              <Route path="/discover/toplists/:id" element={<DiscoveryCollectionPage kind="toplists" />} />
-              <Route path="/discover/playlists/:id" element={<DiscoveryCollectionPage kind="playlists" />} />
-              <Route path="/search" element={<SearchPage />} />
-              <Route path="/favorites" element={<FavoritesPage />} />
-              <Route path="/playlists" element={<PlaylistsPage />} />
-              <Route path="/playlists/ai-create" element={<AiPlaylistPage />} />
-              <Route path="/playlists/:id/ai-add" element={<AiPlaylistPage />} />
-              <Route path="/playlists/:id" element={<PlaylistDetailPage />} />
-              <Route path="/history" element={<HistoryPage />} />
-              <Route path="/admin" element={<AdminPage />} />
-              <Route path="/admin/users" element={<AdminUsersPage />} />
-              <Route path="/admin/sources" element={<AdminSourcesPage />} />
-              <Route path="/admin/recommend" element={<AdminRecommendPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>}
-          </main>
+    <LyricsPanelContext.Provider value={lyricsPanel}>
+      <div className="app-atmosphere app-viewport flex h-dvh flex-col text-foreground">
+        <MobileHeader onMenuClick={() => setDrawerOpen(true)} />
+        <div className="flex min-h-0 flex-1 overflow-hidden desktop:gap-3 desktop:px-3 desktop:pt-3">
+          <Sidebar />
+          <div className="app-main-frame flex min-h-0 min-w-0 flex-1 overflow-hidden">
+            {!offlineUsername && <CachedHomePage key={username} />}
+            <main hidden={!offlineUsername && location.pathname === '/'} className="app-main min-h-0 min-w-0 flex-1 overflow-y-auto" tabIndex={0} aria-label="页面内容">
+              {offlineUsername ? <Routes>
+                <Route path="/offline" element={<OfflinePage />} />
+                <Route path="*" element={<Navigate to="/offline" replace />} />
+              </Routes> : <Routes>
+                <Route path="/offline" element={<OfflinePage />} />
+                <Route path="/" element={null} />
+                <Route path="/recommend" element={<RecommendedMusicPage />} />
+                <Route path="/discover/toplists/:id" element={<DiscoveryCollectionPage kind="toplists" />} />
+                <Route path="/discover/playlists/:id" element={<DiscoveryCollectionPage kind="playlists" />} />
+                <Route path="/search" element={<SearchPage />} />
+                <Route path="/favorites" element={<FavoritesPage />} />
+                <Route path="/playlists" element={<PlaylistsPage />} />
+                <Route path="/playlists/ai-create" element={<AiPlaylistPage />} />
+                <Route path="/playlists/:id/ai-add" element={<AiPlaylistPage />} />
+                <Route path="/playlists/:id" element={<PlaylistDetailPage />} />
+                <Route path="/history" element={<HistoryPage />} />
+                <Route path="/admin" element={<AdminPage />} />
+                <Route path="/admin/users" element={<AdminUsersPage />} />
+                <Route path="/admin/sources" element={<AdminSourcesPage />} />
+                <Route path="/admin/recommend" element={<AdminRecommendPage />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>}
+            </main>
+          </div>
         </div>
+        <PlayerBar audio={audioElement} onAudioElement={setAudioElement} />
+        <MobileSidebar open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+        <QueuePanel />
+        <LyricsPanel audio={audioElement} />
+        <SongContextMenu />
+        <ToastContainer />
       </div>
-      <PlayerBar audio={audioElement} onAudioElement={setAudioElement} />
-      <MobileSidebar open={drawerOpen} onClose={() => setDrawerOpen(false)} />
-      <QueuePanel />
-      <LyricsPanel audio={audioElement} />
-      <SongContextMenu />
-      <ToastContainer />
-    </div>
+    </LyricsPanelContext.Provider>
   )
 }
