@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultEqualizer, designEqualizer, EQ_PRESETS } from '@/lib/client/equalizer'
 import { EQ_STORAGE_KEY, readEqualizer, useEqualizerStore } from '@/lib/store/equalizer-store'
 import { attachAnalysisPipeline, bindEqualizerLifecycle, disposeAnalysisPipeline, getExistingAnalysisPipeline, resumeAudioPipeline } from '@/lib/client/audio-analysis'
+import { toast } from '@/lib/toast'
+
+vi.mock('@/lib/toast', () => ({ toast: { warning: vi.fn() } }))
 
 class Param {
   value = 0
@@ -40,7 +43,8 @@ beforeEach(() => {
   localStorage.clear()
   Context.instances = []
   vi.stubGlobal('AudioContext', Context)
-  useEqualizerStore.setState({ settings: defaultEqualizer(), saved: [], status: '' })
+  useEqualizerStore.setState({ settings: defaultEqualizer(), saved: [], status: 'idle' })
+  vi.mocked(toast.warning).mockClear()
 })
 afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
@@ -190,6 +194,86 @@ describe('共享音频链路', () => {
     cleanup()
     expect(Context.instances[0].close).toHaveBeenCalled()
   })
+  it('未接管时主动终止加载不触发 EQ 警告', () => {
+    useEqualizerStore.getState().update({ enabled: true })
+    const audio = new Audio()
+    const cleanup = bindEqualizerLifecycle(audio)
+    try {
+      Object.defineProperty(audio, 'error', { value: { code: 1, message: 'MEDIA_ERR_ABORTED' } })
+      audio.dispatchEvent(new Event('error'))
+      expect(useEqualizerStore.getState().status).toBe('idle')
+      expect(toast.warning).not.toHaveBeenCalled()
+      expect(Context.instances).toHaveLength(0)
+    } finally { cleanup() }
+  })
+  it.each([1, 2, 3, 4])('媒体错误 %i 及同源音质重试不改变运行中的 EQ', async code => {
+    useEqualizerStore.getState().update({ enabled: true })
+    const audio = new Audio('/api/audio?uid=kw-song&quality=flac')
+    const cleanup = bindEqualizerLifecycle(audio)
+    try {
+      const pipeline = await attachAnalysisPipeline(audio)
+      Object.defineProperty(audio, 'error', { configurable: true, value: { code } })
+      audio.dispatchEvent(new Event('error'))
+      expect(useEqualizerStore.getState().status).toBe('running')
+      audio.src = '/api/audio?uid=kw-song&quality=128k'
+      Object.defineProperty(audio, 'error', { configurable: true, value: null })
+      for (const event of ['loadedmetadata', 'canplay', 'play', 'playing']) audio.dispatchEvent(new Event(event))
+      await Promise.resolve()
+      expect(useEqualizerStore.getState().status).toBe('running')
+      expect(toast.warning).not.toHaveBeenCalled()
+      expect(getExistingAnalysisPipeline(audio)).toBe(pipeline)
+      expect(Context.instances).toHaveLength(1)
+    } finally { cleanup() }
+  })
+  it('媒体成功或失败都不掩盖 context 中断，context 恢复才清除警告', async () => {
+    useEqualizerStore.getState().update({ enabled: true })
+    const audio = new Audio()
+    const cleanup = bindEqualizerLifecycle(audio)
+    try {
+      await attachAnalysisPipeline(audio)
+      const context = Context.instances[0]
+      context.state = 'suspended'
+      context.dispatchEvent(new Event('statechange'))
+      context.resume.mockRejectedValue(new Error('resume blocked'))
+      for (const event of ['error', 'loadedmetadata', 'canplay', 'play', 'playing']) audio.dispatchEvent(new Event(event))
+      await resumeAudioPipeline(audio)
+      expect(useEqualizerStore.getState().status).toBe('interrupted')
+      expect(toast.warning).toHaveBeenCalledTimes(1)
+      expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('系统暂停'), 6000)
+      context.state = 'running'
+      context.dispatchEvent(new Event('statechange'))
+      expect(useEqualizerStore.getState().status).toBe('running')
+    } finally { cleanup() }
+  })
+  it('resume 成功但未派发 statechange 时也会恢复 EQ 状态', async () => {
+    const audio = new Audio()
+    await attachAnalysisPipeline(audio)
+    try {
+      const context = Context.instances[0]
+      context.state = 'suspended'
+      context.dispatchEvent(new Event('statechange'))
+      expect(useEqualizerStore.getState().status).toBe('interrupted')
+      await resumeAudioPipeline(audio)
+      expect(useEqualizerStore.getState().status).toBe('running')
+    } finally { disposeAnalysisPipeline(audio) }
+  })
+  it('已销毁链路的异步恢复结果不会覆盖新播放器状态', async () => {
+    const oldAudio = new Audio()
+    await attachAnalysisPipeline(oldAudio)
+    const context = Context.instances[0]
+    context.state = 'suspended'
+    let finishResume!: () => void
+    context.resume.mockImplementation(() => new Promise<void>(resolve => { finishResume = resolve }))
+    const pending = resumeAudioPipeline(oldAudio)
+    disposeAnalysisPipeline(oldAudio)
+    const newAudio = new Audio()
+    try {
+      await attachAnalysisPipeline(newAudio)
+      finishResume()
+      await pending
+      expect(useEqualizerStore.getState().status).toBe('running')
+    } finally { disposeAnalysisPipeline(newAudio) }
+  })
   it('未获准运行时不接管；超时后仍可重试', async () => {
     vi.stubGlobal('AudioContext', class extends Context { state = 'suspended'; resume = vi.fn(() => new Promise<void>(() => {})) })
     const audio = new Audio()
@@ -205,7 +289,7 @@ describe('共享音频链路', () => {
     const audio = new Audio('https://music.example/test.mp3')
     expect(await attachAnalysisPipeline(audio)).toBeNull()
     expect(Context.instances).toHaveLength(0)
-    expect(useEqualizerStore.getState().status).toContain('CORS')
+    expect(useEqualizerStore.getState().status).toBe('unsupported-source')
   })
   it('iOS 默认不接管，明确启用 EQ 后可接入', async () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('iPhone')

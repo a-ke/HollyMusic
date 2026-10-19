@@ -1,7 +1,9 @@
 import { useEqualizerStore } from '@/lib/store/equalizer-store'
+import { logger } from '@/lib/logger'
 import { toast } from '@/lib/toast'
 import { EQ_FREQUENCIES, filterQ, filterFrequency } from './equalizer'
 import { createEqualizerAutomation } from './equalizer-automation'
+import { EQ_STATUS_MESSAGES, type EqualizerStatus } from './equalizer-status'
 
 /**
  * 频谱分析管线的所有权模块。
@@ -102,13 +104,15 @@ export function attachAnalysisPipeline(audio: HTMLAudioElement): Promise<AudioAn
 
 async function createPipeline(audio: HTMLAudioElement): Promise<AudioAnalysisPipeline | null> {
   const AudioContextClass = getAudioContextConstructor()
-  const report = (status: string) => useEqualizerStore.setState({ status })
-  if (!AudioContextClass) { report('此浏览器不支持 Web Audio，保留原生播放。'); return null }
+  const report = (status: EqualizerStatus) => {
+    if (!disposed.has(audio)) useEqualizerStore.setState({ status })
+  }
+  if (!AudioContextClass) { report('unsupported'); return null }
   if (isAppleMobile() && !useEqualizerStore.getState().settings.enabled) return null
   if (audio.src) {
     const url = new URL(audio.src, location.href)
     if (url.protocol !== 'blob:' && url.origin !== location.origin) {
-      report('此跨域音源未接入 EQ。请通过同源 /api/audio 代理播放；直连需要服务端正确提供 CORS 响应头。')
+      report('unsupported-source')
       return null
     }
   }
@@ -120,7 +124,7 @@ async function createPipeline(audio: HTMLAudioElement): Promise<AudioAnalysisPip
       const resumed = await settleWithTimeout(context.resume())
       if (!resumed) {
         if (!disposed.has(audio) && !(isAppleMobile() && !useEqualizerStore.getState().settings.enabled)) {
-          report('音效尚未获准运行，请点击播放按钮重试。')
+          report('resume-blocked')
         }
         // 图无法运行：绝不接管元素（接管即冻结播放），释放后由下个手势重试。
         void context.close().catch(() => {})
@@ -160,7 +164,7 @@ async function createPipeline(audio: HTMLAudioElement): Promise<AudioAnalysisPip
     const unsubscribe = useEqualizerStore.subscribe((state, old) => {
       if (state.settings !== old.settings) automation.update(state.settings)
     })
-    const onState = () => report(activeContext.state === 'running' ? '' : '系统暂停了音效，请通过播放按钮恢复；歌曲进度和队列会保留。')
+    const onState = () => report(activeContext.state === 'running' ? 'running' : 'interrupted')
     activeContext.addEventListener('statechange', onState)
     const pipeline: AudioAnalysisPipeline = { context, analyser, source, filters, preamp, protection, dispose: () => {
       unsubscribe()
@@ -169,10 +173,14 @@ async function createPipeline(audio: HTMLAudioElement): Promise<AudioAnalysisPip
       void activeContext.close().catch(() => {})
     } }
     pipelines.set(audio, pipeline)
-    useEqualizerStore.setState({ sampleRate: context.sampleRate, status: '' })
+    useEqualizerStore.setState({ sampleRate: context.sampleRate, status: 'running' })
     return pipeline
-  } catch {
-    report('无法启用音效，保留原生播放。请检查浏览器音频权限。')
+  } catch (error) {
+    logger.warn('[AudioAnalysis] 初始化音频链路失败', {
+      name: error instanceof Error ? error.name : 'UnknownError',
+      message: error instanceof Error ? error.message : String(error),
+    })
+    report('initialization-failed')
     // 某些 Android 浏览器会拒绝在非用户手势中创建 MediaElementSource；下个手势再重试。
     if (context && context.state !== 'closed') void context.close().catch(() => {})
     return null
@@ -188,15 +196,18 @@ export function disposeAnalysisPipeline(audio: HTMLAudioElement): void {
 
 export async function resumeAudioPipeline(audio: HTMLAudioElement): Promise<void> {
   const pipeline = getExistingAnalysisPipeline(audio)
-  if (!pipeline || pipeline.context.state === 'running') return
-  const resumed = await settleWithTimeout(pipeline.context.resume())
-  useEqualizerStore.setState({ status: resumed && (pipeline.context.state as AudioContextState) === 'running' ? '' : '系统暂停了音效，请通过播放按钮恢复。' })
+  if (!pipeline) return
+  if (pipeline.context.state !== 'running') await settleWithTimeout(pipeline.context.resume())
+  // 等待期间播放器可能已卸载；旧链路的结果不能覆盖新播放器的状态。
+  if (disposed.has(audio) || getExistingAnalysisPipeline(audio) !== pipeline) return
+  useEqualizerStore.setState({ status: pipeline.context.state === 'running' ? 'running' : 'interrupted' })
 }
 
 /** 标签页与 standalone 共用；恢复 context 不调用 play/load/seek。 */
 export function bindEqualizerLifecycle(audio: HTMLAudioElement): () => void {
   const stopStatus = useEqualizerStore.subscribe((state, old) => {
-    if (state.settings.enabled && state.status && state.status !== old.status) toast.warning(state.status, 6000)
+    const message = EQ_STATUS_MESSAGES[state.status]
+    if (state.settings.enabled && message && state.status !== old.status) toast.warning(message, 6000)
   })
   const gesture = () => {
     if (useEqualizerStore.getState().settings.enabled) void attachAnalysisPipeline(audio).then(() => resumeAudioPipeline(audio))
@@ -204,16 +215,13 @@ export function bindEqualizerLifecycle(audio: HTMLAudioElement): () => void {
   }
   const visible = () => { if (!document.hidden && !audio.paused) void resumeAudioPipeline(audio) }
   const play = () => { void resumeAudioPipeline(audio) }
-  const error = () => {
-    if (useEqualizerStore.getState().settings.enabled) useEqualizerStore.setState({ status: '音频加载失败。跨域音源需允许 CORS（含重定向和 Range 响应），建议使用同源 /api/audio 代理。' })
-  }
   window.addEventListener('click', gesture, true)
   window.addEventListener('touchend', gesture, true)
   window.addEventListener('keydown', gesture, true)
   window.addEventListener('pageshow', visible)
   document.addEventListener('visibilitychange', visible)
   audio.addEventListener('play', play)
-  audio.addEventListener('error', error)
+  // 不订阅媒体 error/playing：它们不能证明 Web Audio 链路失败或恢复。
   return () => {
     stopStatus()
     window.removeEventListener('click', gesture, true)
@@ -222,7 +230,6 @@ export function bindEqualizerLifecycle(audio: HTMLAudioElement): () => void {
     window.removeEventListener('pageshow', visible)
     document.removeEventListener('visibilitychange', visible)
     audio.removeEventListener('play', play)
-    audio.removeEventListener('error', error)
     disposeAnalysisPipeline(audio)
   }
 }

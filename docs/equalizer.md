@@ -26,7 +26,9 @@ HTMLAudioElement（原有音量、静音、淡入淡出）
 
 复用外观设置的 Zustand + localStorage 模式，键为 `holly-equalizer`。结构包含 version=1、settings 和至多 20 个用户预设。读入验证所有字段、10 段数量、有限值及 ±12dB 范围；支持无版本旧配置迁移，损坏/未来版本回退默认。音频更新同步，写盘防抖 150ms，pagehide 强制保存；存储失败保留会话操作。系统预设集中在 `lib/client/equalizer.ts`，手动调节自动转为 Custom，重置保留用户保存的预设。
 
-WeakMap 复用/去重共享链路。只有用户手势创建且确认 context 已 running 才接管元素；resume 超时不接管。播放器销毁会撤销订阅、事件监听、断开节点、关闭 context；频谱布局卸载不会销毁播放器资源。visible/pageshow、媒体 play 和用户手势尝试恢复被挂起或中断的 context，恢复不调用 play/load/seek、不改变队列。失败显示面板状态及提示消息。
+WeakMap 复用/去重共享链路。只有用户手势创建且确认 context 已 running 才接管元素；resume 超时不接管。播放器销毁会撤销订阅、事件监听、断开节点、关闭 context；频谱布局卸载不会销毁播放器资源。visible/pageshow、媒体 play 和用户手势尝试恢复被挂起或中断的 context，恢复不调用 play/load/seek、不改变队列。
+
+EQ 运行状态使用 `EqualizerStatus`，提示文案集中在 `equalizer-status.ts`。EQ 只负责 Web Audio 支持情况、接入条件、初始化和 context 中断/恢复；普通媒体加载、解码、主动取消及音质重试仍由 `useAudioPlayer` 统一处理。媒体 error 不写 EQ 状态，playing 也不能证明 context 已恢复。context 恢复后清除自身提示；已销毁链路的异步结果不能覆盖新播放器状态。运行状态不持久化。
 
 ## 网页与 PWA
 
@@ -36,7 +38,7 @@ Service Worker 原本仅缓存构建清单资源，跳过 `/api/`、`/rest/`、�
 
 iOS/iPadOS 原先为避免破坏原生后台播放而不接入频谱音频图。本次仍默认保留该行为；只有明确启用 EQ 才允许接管。系统可能在锁屏或后台挂起 Web Audio，回前台或操作播放按钮时尝试恢复。由于媒体源接管不可逆，关闭 EQ 只旁路滤波；如需恢复原生后台输出，关闭后刷新页面。普通网页、PWA 都不能绕过操作系统限制。
 
-媒体元素原有 `crossOrigin='anonymous'` 在 src 之前设置。正式链路只接入同源或 blob 音源，跨域直连拒绝接管并提示使用同源代理；如后续支持直连，需要上游（包括重定向和 206 Range）返回正确的 Access-Control-Allow-Origin，凭据请求还需相应 credentials 配置。CORS 失败不能靠 Web Audio 解除，也不能仅凭零电平认定 CORS（静音曲段也会为零）。现有媒体错误与新增明确提示共同反馈加载失败。
+媒体元素原有 `crossOrigin='anonymous'` 在 src 之前设置。正式链路只接入同源或 blob 音源，跨域直连拒绝接管并提示使用同源代理；如后续支持直连，需要上游（包括重定向和 206 Range）返回正确的 Access-Control-Allow-Origin，凭据请求还需相应 credentials 配置。CORS 失败不能靠 Web Audio 解除，也不能仅凭零电平认定 CORS（静音曲段也会为零）。媒体 error 本身不能确定是 CORS 问题，EQ 不再为它附加跨域错误提示。
 
 ## 自动验证
 
@@ -49,9 +51,23 @@ pnpm build:all
 node scripts/check-equalizer-response.mjs
 ```
 
-Node 26 环境的前端测试使用 `--no-experimental-webstorage`，避免 Node 自身未配置文件的 experimental localStorage 遮挡 jsdom 存储；正常浏览器不需要此参数。原生对照脚本需要 Node.js 22+（内置 WebSocket），使用本机 Chrome（其他路径可设置 `CHROME_BIN`），无需安装依赖；比较 5 种采样率、全部系统预设及全段 +12dB 共 50 个场景与原生 `BiquadFilterNode.getFrequencyResponse()`，阈值 0.0001dB；另外检查中心目标误差低于 0.05dB，并真实渲染六组波形：DC/1kHz 正弦信号、原生 hold/兼容 fallback、每 8ms 重调度前级/极限交替 EQ、最终关闭旁路，以及摇滚/−12dB 前级下反复保存预设的电平稳定性。脚本通过 CDP 等待 OfflineAudioContext 渲染完成。这验证滤波模型和指定信号的参数连续性，不等于所有音源、真实扬声器、移动设备或后台播放验收。
+Node 26 环境的前端测试使用 `--no-experimental-webstorage`，避免 Node 自身未配置文件的 experimental localStorage 遮挡 jsdom 存储；正常浏览器不需要此参数。原生对照脚本需要 Node.js 22+（内置 WebSocket）及本机 Chromium 浏览器，无新增 npm 依赖。通过 `CHROME_BIN` 指定 Chrome/Edge 可执行文件；未设置时 macOS 使用默认 Chrome 路径，其他平台查找 `chromium`。
 
-测试覆盖配置回退/迁移、预设切换/保存/删除/重置、持久化及写入失败、Flat/单段/级联频响、自动保护、同元素并发初始化、实时节点更新/透明关闭、切源复用、context 恢复不影响媒体、清理、iOS 主动启用及跨域拒绝策略；另有面板操作和 SW 排除请求测试。
+脚本转译实际生产模块，由 `equalizer-browser-checks.js` 在浏览器执行，通过 CDP 等待 OfflineAudioContext 渲染完成。验收分开记录：
+
+| 检查 | 场景与判据 |
+| --- | --- |
+| 静态频响 | 22.05/32/44.1/48/96kHz × 全部系统预设及全段 +12dB，共 50 项；模型与原生误差 <0.0001dB，中心目标误差 <0.05dB |
+| 参数连续性 | 48kHz DC/1kHz 正弦 × 原生 hold/fallback，共 4 项；每 8ms 调节前级或极限交替 EQ，保留原有相邻样本跳变与峰值门限 |
+| 保存不改变声音 | 同一输入、滤波图、初始摇滚/−12dB 前级和旁路时刻，比较保存 40 次与不操作的完整波形；5 种采样率 × 6 个频点 × hold/fallback，共 60 项，逐样本最大差 <1e-7 |
+| 旁路还原 | 独立与直通渲染比较；包含上述 60 组输入及 4 组快速调节，共 64 项。0.5s 关闭 EQ，测量 1–2s 窗口；增益差绝对值 <0.1dB，归一化 RMS 差 <1% |
+| 反向对照 | hold/fallback 下故意让保存改变 0.1dB 前级，以及让旁路多出 0.1dB 增益；两类错误均必须被对应判据拒绝 |
+
+六个频点为 DC、31/125/1000/8000Hz 和 `min(16000, 0.4 × 采样率)`，高频测试保持在 Nyquist 以下。保存断言只测操作引起的差异，不能用整条滤波链相对理想 DC 的误差代替。旁路的两个门限是本项目的工程验收目标，分别限制幅度差和包括相位在内的波形差；不承诺原生 IIR 自动化结束后逐位还原。快速调节的旁路也独立验收，不能以曲线或 AudioParam 数值归零替代实际输出检查。
+
+CI 在已有 required `check` job 内执行此脚本；应用原有检查使用 Node 20，原生音频步骤使用 Node 22 和 Ubuntu runner 预装的 Chrome，日志记录浏览器版本及各项误差。浏览器随 runner 镜像更新，升级后的失败仍需复核，不能自动放宽门限。这些检查不替代真实扬声器、移动设备或后台播放验收。
+
+测试覆盖配置回退/迁移、预设切换/保存/删除/重置、持久化及写入失败、Flat/单段/级联频响、自动保护、同元素并发初始化、实时节点更新/旁路、切源复用、context 恢复不影响媒体、清理、iOS 主动启用及跨域拒绝策略；另有面板操作和 SW 排除请求测试。新增媒体四类错误及同源音质重试不影响 EQ、真实中断不被媒体事件掩盖、恢复清理与旧链路异步结果隔离的回归用例。
 
 ## 真实设备手工验收（待执行）
 
@@ -74,6 +90,7 @@ Node 26 环境的前端测试使用 `--no-experimental-webstorage`，避免 Node
 | --- | --- | --- |
 | 新增 | `lib/client/audio-param-smoother.ts` | 原生/兼容自动化保持及指数时间线 |
 | 新增 | `lib/client/equalizer-automation.ts` | 实际节点参数应用、启动初始化与过渡保护 |
+| 新增 | `lib/client/equalizer-status.ts` | EQ 运行状态类型及统一提示文案 |
 | 新增 | `lib/client/audio-param-smoother.test.ts` | 重调度连续性与未来事件清理测试 |
 | 新增 | `lib/client/equalizer.ts` | 配置校验/迁移、频段、系统预设、频响及保护算法 |
 | 新增 | `lib/store/equalizer-store.ts` | Zustand 状态、自定义预设、持久化 |
@@ -90,18 +107,21 @@ Node 26 环境的前端测试使用 `--no-experimental-webstorage`，避免 Node
 | 新增 | `frontend/components/Equalizer.test.tsx` | 状态与共享音频图测试 |
 | 新增 | `frontend/components/EqualizerPanel.test.tsx` | UI 交互测试 |
 | 新增 | `scripts/check-equalizer-response.mjs` | 原生 Chromium 频响对照 |
+| 新增 | `scripts/equalizer-browser-checks.js` | 原生频响、连续性、保存与旁路独立验收 |
+| 修改 | `.github/workflows/ci.yml` | required check 纳入原生音频验收 |
 | 新增 | `docs/equalizer.md` | 架构、限制与验收步骤 |
 
-## 本次验证结果
+## 本次验证结果（2026-10-19）
 
 - `pnpm typecheck`：通过。
 - `pnpm lint`：0 errors，32 条既有 warnings，本次 EQ 文件无告警。
-- 根目录测试 `--maxWorkers=1`：56 个文件，503 项通过。与生产构建并行运行时，现有音源子进程崩溃风暴测试曾出现 SIGKILL 时序失败；构建结束后串行完整重跑通过，没有修改音源测试或兼容脚本。
-- 前端测试：29 个文件、255 项全量通过；随后新增的“启动保护及快速反向调整”回归用例与所在文件其余 7 项一并通过（该轮合计 256 项）。Node 26 使用上述 webstorage 兼容参数。
+- 根目录测试 `--maxWorkers=1`：58 个文件，572 项通过。
+- 前端测试：30 个文件、286 项全量通过；其中 EQ 链路与面板 21 项。测试运行于 Windows / Node 24.15.0。
 - `pnpm build:all`：Next.js、前端 TypeScript/Vite、SW 构建均成功；Vite 提示现有主包大于 500kB。
-- 原生频响对照：50 个场景通过，模型与原生最大误差约 0.0000037dB，中心目标最大误差约 0.0047dB；六组渲染波形均通过连续性、幅度范围及关闭旁路断言。
+- Windows Chrome 155.0.8059.80、Edge 155.0.4283.62 原生验收均通过：50 项频响、4 项连续性、60 项保存对照、64 项旁路及两种自动化路径下的反向对照。模型与原生最大误差约 0.0000037dB，中心目标最大误差约 0.0047dB；保存操作的逐样本差为 0。
+- 原生旁路实测最大增益差约 0.06238dB、归一化 RMS 差约 0.7156%，均出现在 96kHz DC 场景。旧脚本的单样本/理想 DC 断言在本机确实失败；现改用上述分项判据，保留残差记录，不再声称逐位还原或将此残差归因于保存操作。
 - `git diff --check`：通过。
-- 未进行真实设备音质试听、Safari/Edge 实机及移动 PWA/锁屏验收，按上文清单补测。
+- 未进行真实设备音质试听、Safari 及移动 PWA/锁屏验收；桌面 Chrome/Edge 自动化不能替代上文手工清单。
 
 Web Audio 接口参考：[createMediaElementSource](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/createMediaElementSource)、[resume](https://developer.mozilla.org/en-US/docs/Web/API/AudioContext/resume)。
 
@@ -116,4 +136,4 @@ Web Audio 接口参考：[createMediaElementSource](https://developer.mozilla.or
 - 确认旧实现将负前级的瞬态上界截为 0dB，导致已有衰减被忽略。现在以正在运行的手动前级和目标前级的真实较大值计算，保留负前级的保护余量。
 - 仅修改预设标识、保存预设或换成内容相同的频段数组，不再重调度节点，保持已有自动化继续运行。
 - iOS 等待 context.resume() 后，再次确认 EQ 仍启用；已关闭则释放尚未接管的 context，不创建媒体源。超时后已关闭 EQ 的场景也不再发送无关的恢复提示。
-- 三个新增回归用例在修复前全部失败、修复后通过；EQ 状态/音频链路与面板合计 13 项通过，类型检查及变更文件 ESLint 通过。原生验证补充负前级下重复保存预设的波形测试，不包含实际 iOS 后台实机验收。
+- 这些行为由负前级保护、预设元数据不触发重调度、iOS 初始化竞态用例持续覆盖；原生验证使用成对波形检查负前级下重复保存预设，不包含实际 iOS 后台实机验收。

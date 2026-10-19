@@ -12,7 +12,7 @@ beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value: function (this: HTMLDialogElement) { this.open = true } })
   Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value: function (this: HTMLDialogElement) { this.open = false } })
-  useEqualizerStore.setState({ settings: defaultEqualizer(), saved: [], status: '' })
+  useEqualizerStore.setState({ settings: defaultEqualizer(), saved: [], status: 'idle' })
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)

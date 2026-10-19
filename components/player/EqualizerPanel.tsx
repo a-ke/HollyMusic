@@ -2,6 +2,7 @@ import { useDeferredValue, useMemo, useState } from 'react'
 import { SlidersHorizontal } from 'lucide-react'
 import { attachAnalysisPipeline, isAppleMobile, resumeAudioPipeline } from '@/lib/client/audio-analysis'
 import { EQ_FREQUENCIES, EQ_PRESETS, designedResponse, isBandAvailable, protectionDb, responseFrequencies } from '@/lib/client/equalizer'
+import { EQ_STATUS_MESSAGES } from '@/lib/client/equalizer-status'
 import { useEqualizerStore } from '@/lib/store/equalizer-store'
 import { Modal } from '@/components/shared/Modal'
 import { PlayerButton } from './PlayerButton'
@@ -11,6 +12,7 @@ const inputClass = 'min-h-11 rounded-xl border border-border bg-background px-3 
 
 export function EqualizerPanel({ audio, onClose }: { audio: HTMLAudioElement | null; onClose: () => void }) {
   const { settings, saved, sampleRate, status, update, setBand, selectPreset, reset, save, remove } = useEqualizerStore()
+  const statusMessage = EQ_STATUS_MESSAGES[status]
   const [name, setName] = useState('')
   const [active, setActive] = useState<number | null>(null)
   const deferred = useDeferredValue(settings)
@@ -65,7 +67,7 @@ export function EqualizerPanel({ audio, onClose }: { audio: HTMLAudioElement | n
     {saved.length > 0 && <ul className="mt-2 divide-y divide-border">{saved.map(p => <li key={p.id} className="flex items-center justify-between gap-2 text-sm"><button type="button" onClick={() => selectPreset(p.id)} className="min-h-11 flex-1 truncate text-left hover:text-primary">{p.name}</button><button type="button" aria-label={`删除预设 ${p.name}`} onClick={() => remove(p.id)} className="min-h-11 px-3 text-muted-foreground hover:text-destructive">删除</button></li>)}</ul>}
     <p className="mt-3 text-xs text-muted-foreground">最多保存 20 个预设，仅保存在此浏览器；恢复默认保留已保存的自定义预设。</p>
     {isAppleMobile() && <p className="mt-3 rounded-xl bg-muted p-3 text-xs leading-relaxed">iOS / iPadOS 开启 EQ 后，系统可能在锁屏或后台暂停 Web Audio。回到应用后可通过播放按钮恢复；关闭 EQ 会旁路滤波，但当前媒体已接入 Web Audio。如需恢复原生后台播放，请关闭 EQ 后刷新页面。PWA 无法绕过系统限制。</p>}
-    {status && <p role="alert" className="mt-3 rounded-xl border border-border p-3 text-sm">{status}</p>}
+    {statusMessage && <p role="alert" className="mt-3 rounded-xl border border-border p-3 text-sm">{statusMessage}</p>}
   </Modal>
 }
 

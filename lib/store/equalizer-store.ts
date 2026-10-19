@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import { clampDb, defaultEqualizer, EQ_PRESETS, parseEqualizer, type EqualizerConfig, type EqualizerSettings } from '@/lib/client/equalizer'
+import type { EqualizerStatus } from '@/lib/client/equalizer-status'
 
 export const EQ_STORAGE_KEY = 'holly-equalizer'
 export function readEqualizer(): EqualizerConfig {
   try { return parseEqualizer(localStorage.getItem(EQ_STORAGE_KEY)) } catch { return parseEqualizer(null) }
 }
 interface EqualizerStore extends EqualizerConfig {
-  status: string
+  status: EqualizerStatus
   sampleRate: number
   update: (patch: Partial<EqualizerSettings>) => void
   setBand: (index: number, gain: number) => void
@@ -17,7 +18,7 @@ interface EqualizerStore extends EqualizerConfig {
 }
 const initial = readEqualizer()
 export const useEqualizerStore = create<EqualizerStore>((set, get) => ({
-  ...initial, status: initial.settings.enabled ? '音效将在下一次点击或触摸时启用。' : '', sampleRate: 48000,
+  ...initial, status: initial.settings.enabled ? 'awaiting-gesture' : 'idle', sampleRate: 48000,
   update: patch => set({ settings: { ...get().settings, ...patch } }),
   setBand: (index, gain) => {
     if (index < 0 || index >= 10 || !Number.isFinite(gain)) return
