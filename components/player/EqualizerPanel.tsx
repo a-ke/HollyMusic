@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useState } from 'react'
+import { useDeferredValue, useMemo, useState, type ReactNode } from 'react'
 import { SlidersHorizontal } from 'lucide-react'
 import { attachAnalysisPipeline, isAppleMobile, resumeAudioPipeline } from '@/lib/client/audio-analysis'
 import { EQ_FREQUENCIES, EQ_PRESETS, designedResponse, isBandAvailable, protectionDb, responseFrequencies } from '@/lib/client/equalizer'
@@ -9,6 +9,17 @@ import { PlayerButton } from './PlayerButton'
 
 const db = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(1)} dB`
 const inputClass = 'min-h-11 rounded-xl border border-border bg-background px-3 text-sm focus-visible:outline-2 focus-visible:outline-ring'
+
+/** 显式切换状态，避免全局音频手势在捕获阶段刷新时覆盖 checkbox 的原生勾选。 */
+function EqualizerSwitch({ checked, onChange, children }: { checked: boolean; onChange: (checked: boolean) => void; children: ReactNode }) {
+  return <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
+    className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg text-left text-sm focus-visible:outline-2 focus-visible:outline-ring">
+    <span aria-hidden="true" className={`flex h-6 w-10 shrink-0 items-center rounded-full p-0.5 ${checked ? 'bg-primary' : 'bg-input'}`}>
+      <span className={`h-5 w-5 rounded-full transition-transform motion-reduce:transition-none ${checked ? 'translate-x-4 bg-primary-foreground' : 'bg-background'}`} />
+    </span>
+    {children}
+  </button>
+}
 
 export function EqualizerPanel({ audio, onClose }: { audio: HTMLAudioElement | null; onClose: () => void }) {
   const { settings, saved, sampleRate, status, update, setBand, selectPreset, reset, save, remove } = useEqualizerStore()
@@ -26,7 +37,7 @@ export function EqualizerPanel({ audio, onClose }: { audio: HTMLAudioElement | n
   }
   return <Modal open onClose={onClose} title="均衡器" description="雕琢声音的每一处细节 · 10 段图形 EQ" size="xl" closeButtonLabel="关闭均衡器" bodyClassName="pb-[max(1.5rem,env(safe-area-inset-bottom))]">
     <div className="flex items-center justify-between gap-3">
-      <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-medium"><input type="checkbox" role="switch" checked={settings.enabled} onChange={e => { update({ enabled: e.target.checked }); if (e.target.checked) resume() }} className="h-5 w-5 accent-primary" />启用 EQ</label>
+      <EqualizerSwitch checked={settings.enabled} onChange={enabled => { update({ enabled }); if (enabled) resume() }}><span className="font-medium">启用 EQ</span></EqualizerSwitch>
       <button type="button" onClick={reset} className={`${inputClass} hover:bg-accent`}>恢复默认</button>
     </div>
     <label className="mt-4 flex items-center gap-3 text-sm">音效预设
@@ -58,7 +69,7 @@ export function EqualizerPanel({ audio, onClose }: { audio: HTMLAudioElement | n
     <p className="mt-2 text-xs text-muted-foreground">范围 −12 至 +12 dB；手机可横向滚动频段。{!settings.enabled && '当前设置已保存，开启 EQ 后生效。'}</p>
     <label className="mt-5 flex items-center justify-between text-sm" htmlFor="eq-preamp"><span>手动前级增益</span><output>{db(settings.preamp)}</output></label>
     <input id="eq-preamp" type="range" min="-12" max="12" step="0.5" value={settings.preamp} onChange={e => update({ preamp: Number(e.target.value), preset: 'custom' })} className="mt-2 h-9 w-full accent-primary" />
-    <label className="mt-2 flex min-h-11 cursor-pointer items-center gap-3 text-sm"><input type="checkbox" role="switch" checked={settings.autoPreamp} onChange={e => update({ autoPreamp: e.target.checked, preset: 'custom' })} className="h-5 w-5 accent-primary" />自动防削波<span className="ml-auto text-xs tabular-nums text-muted-foreground">保护 {db(curve.compensation)}</span></label>
+    <div className="mt-2 flex items-center justify-between gap-3"><EqualizerSwitch checked={settings.autoPreamp} onChange={autoPreamp => update({ autoPreamp, preset: 'custom' })}>自动防削波</EqualizerSwitch><span className="text-xs tabular-nums text-muted-foreground">保护 {db(curve.compensation)}</span></div>
     <p className="text-xs leading-relaxed text-muted-foreground">曲线包含手动前级和自动保护，以实际采样率及补偿后的滤波器级联响应计算。低采样率无法处理的频段会禁用。软件保护降低削波风险，不能保证所有音源及瞬态峰值绝对不削波；较大提升会降低整体响度。</p>
     <form className="mt-5 flex gap-2" onSubmit={e => { e.preventDefault(); save(name); setName('') }}>
       <input aria-label="自定义预设名称" placeholder="保存当前设置为…" value={name} maxLength={40} onChange={e => setName(e.target.value)} className={`${inputClass} min-w-0 flex-1`} />

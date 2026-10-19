@@ -1,4 +1,5 @@
 import { act } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { beforeEach, afterEach, expect, it, vi } from 'vitest'
 import { EqualizerPanel } from '@/components/player/EqualizerPanel'
@@ -31,13 +32,13 @@ it('面板实时调整频段、预设和频响，关闭开关保留参数', asyn
   const select = container.querySelector('select')!
   await act(async () => { select.value = 'rock'; select.dispatchEvent(new Event('change', { bubbles: true })) })
   expect(useEqualizerStore.getState().settings.preset).toBe('rock')
-  await act(async () => container.querySelector<HTMLInputElement>('input[role="switch"]')!.click())
+  await act(async () => container.querySelector<HTMLButtonElement>('button[role="switch"]')!.click())
   const path = container.querySelector('path[stroke="currentColor"]')!.getAttribute('d')
   await input('input[aria-label="1000 Hz 增益"]', '8')
   expect(useEqualizerStore.getState().settings.bands[5]).toBe(8)
   expect(select.value).toBe('custom')
   expect(container.querySelector('path[stroke="currentColor"]')!.getAttribute('d')).not.toBe(path)
-  await act(async () => container.querySelector<HTMLInputElement>('input[role="switch"]')!.click())
+  await act(async () => container.querySelector<HTMLButtonElement>('button[role="switch"]')!.click())
   expect(useEqualizerStore.getState().settings.enabled).toBe(false)
   expect(useEqualizerStore.getState().settings.bands[5]).toBe(8)
 })
@@ -48,4 +49,18 @@ it('通过面板保存、选择和删除自定义预设', async () => {
   expect(container.textContent).toContain('夜间')
   await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="删除预设 夜间"]')!.click())
   expect(useEqualizerStore.getState().saved).toHaveLength(0)
+})
+
+it.each([['启用 EQ', 'enabled', false], ['自动防削波', 'autoPreamp', true]] as const)('全局捕获阶段同步更新音频状态时，%s 仍可切换', async (label, key, initial) => {
+  const updateStatus = () => flushSync(() => useEqualizerStore.setState({ status: 'running' }))
+  window.addEventListener('click', updateStatus, true)
+  try {
+    const toggle = [...container.querySelectorAll<HTMLButtonElement>('button[role="switch"]')].find(button => button.textContent?.includes(label))!
+    await act(async () => toggle.click())
+    expect(useEqualizerStore.getState().settings[key]).toBe(!initial)
+    expect(toggle.getAttribute('aria-checked')).toBe(String(!initial))
+    await act(async () => toggle.click())
+    expect(useEqualizerStore.getState().settings[key]).toBe(initial)
+    expect(toggle.getAttribute('aria-checked')).toBe(String(initial))
+  } finally { window.removeEventListener('click', updateStatus, true) }
 })
