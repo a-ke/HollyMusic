@@ -1,9 +1,10 @@
 import type { QualityType } from '@/lib/types/music'
+import { offlineAudioCacheName, offlineAudioCacheKey } from '@/lib/playback-protocol'
 
 export function getOfflineAudioCacheName(username: string): string {
-  return `holly-audio-v1:${encodeURIComponent(username)}`
+  return offlineAudioCacheName(username)
 }
 
 export function getOfflineAudioCacheKey(uid: string, quality: QualityType): string {
-  return new URL(`/__offline_audio/${encodeURIComponent(uid)}/${quality}`, window.location.origin).href
+  return offlineAudioCacheKey(uid, quality, window.location.origin)
 }

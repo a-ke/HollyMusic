@@ -9,11 +9,13 @@ const VERSION = BUILD?.version ?? 'shell-dev'
 const PRECACHE = BUILD?.precache ?? []
 const SHELL_CACHE = `holly-shell-${VERSION}`
 const ASSETS = new Set(PRECACHE)
-const PLAYBACK_SESSIONS = 'holly-playback-sessions-v1'
+const PROTOCOL = self.__HOLLY_PLAYBACK_PROTOCOL__
+const MESSAGE = PROTOCOL.message
+const PLAYBACK_SESSIONS = PROTOCOL.sessionsCache
 const AUDIO_STALL_MS = 60_000
-const AUDIO_DATA_CACHE = 'holly-playback-data-v1'
+const AUDIO_DATA_CACHE = PROTOCOL.dataCache
 const AUDIO_MEMORY_BYTES = 8 * 1024 * 1024
-const AUDIO_CHUNK_BYTES = 256 * 1024
+const AUDIO_CHUNK_BYTES = PROTOCOL.chunkBytes
 const AUDIO_WRITE_BYTES = 2 * 1024 * 1024
 const AUDIO_WRITE_MS = 5_000
 const hotChunks = new Map()
@@ -28,7 +30,7 @@ async function reportAudioDiagnostic(operation, error, clientId) {
   diagnosticTimes.set(operation, now)
   try {
     const clients = clientId ? [await self.clients.get(clientId)] : await self.clients.matchAll({ type: 'window' })
-    for (const client of clients) client?.postMessage({ type: 'holly-sw-diagnostic', operation,
+    for (const client of clients) client?.postMessage({ type: MESSAGE.DIAGNOSTIC, operation,
       name: String(error?.name || 'Error').slice(0, 80), message: String(error?.message || error).slice(0, 500) })
   } catch { /* 页面已关闭或消息不可用时，诊断不能影响播放和清理。 */ }
 }
@@ -112,7 +114,7 @@ function dropAudioMemory(entry) {
   }
 }
 function audioDataKey(clientId, captureId, part) {
-  return new URL(`/__playback_data/${encodeURIComponent(clientId)}/${encodeURIComponent(captureId)}/${part}`, self.location.origin).href
+  return PROTOCOL.dataKey(clientId, captureId, part, self.location.origin)
 }
 async function deleteAudioData(entry) {
   const cache = await caches.open(AUDIO_DATA_CACHE)
@@ -149,7 +151,7 @@ function withSessions(action) {
   return task
 }
 function sessionKey(clientId, url) {
-  return new URL(`/__playback_session/${encodeURIComponent(clientId)}/${encodeURIComponent(url)}`, self.location.origin).href
+  return PROTOCOL.sessionKey(clientId, url, self.location.origin)
 }
 async function sessionRecord(cache, key, clientId) {
   const response = await cache.match(key)
@@ -184,12 +186,7 @@ function forgetSession(clientId, url, captureId) {
 }
 
 function validSession(data, url) {
-  const uid = url.searchParams.get('uid')
-  const quality = url.searchParams.get('quality') || '320k'
-  return typeof data.captureId === 'string' && data.captureId.length > 0
-    && typeof data.cacheName === 'string' && data.cacheName.startsWith('holly-audio-v1:')
-    && uid && ['128k', '320k', 'flac', 'flac24bit'].includes(quality)
-    && data.cacheKey === new URL(`/__offline_audio/${encodeURIComponent(uid)}/${quality}`, self.location.origin).href
+  return PROTOCOL.isSession(data, url)
 }
 
 // 每个页面/播放源只持有一次不带 Range 的完整下载，所有 Audio Range 从这里读取。
@@ -197,21 +194,28 @@ const audioCaptures = new Map()
 self.addEventListener('message', event => {
   const data = event.data
   const port = event.ports?.[0]
-  if (data?.type === 'holly-prune-audio' && event.source?.id) {
+  if (!PROTOCOL.isWorkerCommand(data) || !event.source?.id) return
+  if (!PROTOCOL.isCompatibleVersion(data.protocolVersion)) {
+    if (data.type === MESSAGE.CAPTURE && port) {
+      port.postMessage({ type: MESSAGE.UNAVAILABLE, protocolVersion: PROTOCOL.version })
+      port.close()
+    }
+    return
+  }
+  if (data.type === MESSAGE.PRUNE) {
     event.waitUntil?.(pruneClosedAudio().catch(error => reportAudioDiagnostic('prune-audio', error, event.source.id)))
     return
   }
-  if (!['holly-capture-audio', 'holly-release-audio', 'holly-cached-audio'].includes(data?.type) || !event.source?.id) return
   let url
   try { url = new URL(data.url) } catch { return }
   if (url.origin !== self.location.origin || url.pathname !== '/api/audio') return
   const key = `${event.source.id}:${url.href}`
-  if (data.type === 'holly-cached-audio') {
+  if (data.type === MESSAGE.CACHED_AUDIO) {
     const entry = audioCaptures.get(key)
     if (entry?.captureId === data.captureId) event.waitUntil?.(persistAudio(entry).catch(error => reportAudioDiagnostic('persist-audio', error, entry.clientId)))
     return
   }
-  if (data.type === 'holly-release-audio') {
+  if (data.type === MESSAGE.RELEASE) {
     const entry = audioCaptures.get(key)
     // 取消缓存写入不释放播放源；后续 Range（包括 SW 重启后）仍需要持久登记。
     if (data.preservePlayback) {
@@ -241,7 +245,7 @@ self.addEventListener('message', event => {
     unavailable() {
       clearTimeout(entry.cacheTimer)
       stopAudioWrites(entry)
-      if (!entry.cacheCancelled) port.postMessage({ type: 'unavailable' })
+      if (!entry.cacheCancelled) port.postMessage({ type: MESSAGE.UNAVAILABLE })
       entry.cacheCancelled = true
     },
     detach() { if (audioCaptures.get(key) === entry) audioCaptures.delete(key) },
@@ -265,10 +269,11 @@ self.addEventListener('message', event => {
   // 这是缓存落盘的期限，不是正常播放下载的总时长限制。
   entry.cacheTimer = setTimeout(() => entry.unavailable(), 5 * 60_000)
   port.onmessage = event => {
-    if (event.data?.type === 'cancel') void entry.release()
+    if (!PROTOCOL.isPortCommand(event.data)) return
+    if (event.data.type === MESSAGE.CANCEL) void entry.release()
     // 清空缓存/会话失效只禁止落盘，不中断仍在播放的 Audio；切歌时再 release。
-    if (event.data?.type === 'cancel-cache') entry.unavailable()
-    if (event.data?.type === 'cached') void persistAudio(entry).catch(error => reportAudioDiagnostic('persist-audio', error, entry.clientId))
+    if (event.data.type === MESSAGE.CANCEL_CACHE) entry.unavailable()
+    if (event.data.type === MESSAGE.CACHED) void persistAudio(entry).catch(error => reportAudioDiagnostic('persist-audio', error, entry.clientId))
   }
   audioCaptures.set(key, entry)
   if (validSession(data, url)) {
@@ -276,7 +281,7 @@ self.addEventListener('message', event => {
       captureId: data.captureId, cacheName: data.cacheName, cacheKey: data.cacheKey,
     }).catch(error => reportAudioDiagnostic('save-session', error, event.source.id)))
   }
-  port.postMessage({ type: 'ready' })
+  port.postMessage({ type: MESSAGE.READY, ...(data.protocolVersion === undefined ? {} : { protocolVersion: PROTOCOL.version }) })
 })
 
 function resetAudioStall(entry) {
@@ -375,15 +380,15 @@ async function portComplete(entry) {
   const headers = { 'content-type': entry.type, 'content-length': String(entry.size),
     ...(entry.etag ? { etag: entry.etag } : {}), ...(entry.modified ? { 'last-modified': entry.modified } : {}) }
   await (await caches.open(AUDIO_DATA_CACHE)).put(entry.stageKey,
-    new Response(JSON.stringify({ version: 1, size: entry.size, headers,
-      chunks: entry.chunks.map(chunk => ({ key: chunk.key, length: chunk.length })) }), {
+    new Response(JSON.stringify(PROTOCOL.createManifest(entry.size, headers,
+      entry.chunks.map(chunk => ({ key: chunk.key, length: chunk.length })))), {
       headers: { 'Content-Type': 'application/json' },
     }))
   if (entry.writesStopped) {
     await (await caches.open(AUDIO_DATA_CACHE)).delete(entry.stageKey)
     return
   }
-  if (!entry.cacheCancelled && !entry.error) entry.port.postMessage({ type: 'complete', cacheName: AUDIO_DATA_CACHE, cacheKey: entry.stageKey })
+  if (!entry.cacheCancelled && !entry.error) entry.port.postMessage({ type: MESSAGE.COMPLETE, cacheName: AUDIO_DATA_CACHE, cacheKey: entry.stageKey })
 }
 
 async function persistAudio(entry) {

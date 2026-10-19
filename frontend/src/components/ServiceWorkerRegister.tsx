@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { logger } from '@/lib/logger'
 import { isCacheStorageAvailable } from '@/lib/browser-storage'
 import { registerPwaInstall } from '@/hooks/usePwaInstall'
+import { PLAYBACK_MESSAGE, isPlaybackDiagnostic, type PlaybackWorkerCommand } from '@/lib/playback-protocol'
 
 /**
  * Service Worker 注册（Vite SPA 版）。
@@ -17,8 +18,7 @@ export function ServiceWorkerRegister() {
     const serviceWorker = navigator.serviceWorker
     const onDiagnostic = (event: MessageEvent) => {
       const data = event.data
-      if (!event.source || event.source !== serviceWorker.controller || data?.type !== 'holly-sw-diagnostic'
-        || typeof data.operation !== 'string' || typeof data.name !== 'string' || typeof data.message !== 'string') return
+      if (!event.source || event.source !== serviceWorker.controller || !isPlaybackDiagnostic(data)) return
       logger.warn(`[SW] ${data.operation.slice(0, 80)}`, { name: data.name.slice(0, 80), message: data.message.slice(0, 500) })
     }
     serviceWorker.addEventListener('message', onDiagnostic)
@@ -26,7 +26,7 @@ export function ServiceWorkerRegister() {
     const register = () => {
       navigator.serviceWorker
         .register(process.env.NODE_ENV === 'development' ? '/sw.js?mode=development' : '/sw.js', { scope: '/' })
-        .then(registration => registration.active?.postMessage({ type: 'holly-prune-audio' }))
+        .then(registration => registration.active?.postMessage({ type: PLAYBACK_MESSAGE.PRUNE } satisfies PlaybackWorkerCommand))
         .catch((err) => {
           logger.warn('[SW] 注册失败:', err)
         })

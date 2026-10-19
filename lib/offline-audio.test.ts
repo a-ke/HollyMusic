@@ -216,6 +216,25 @@ it('旧 Service Worker 不响应握手时及时回退原有缓存方式', async 
   port.close()
 })
 
+it.each([
+  { type: 'ready', protocolVersion: 2 },
+  { type: 'unavailable', protocolVersion: 1 },
+])('SW 握手返回 $type v$protocolVersion 时回退独立下载，不遗留阻塞任务', async reply => {
+  let port!: MessagePort
+  vi.stubGlobal('navigator', { onLine: true, serviceWorker: { controller: {
+    postMessage: (_data: unknown, ports?: MessagePort[]) => {
+      if (ports?.[0]) { port = ports[0]; port.postMessage(reply) }
+    },
+  } } })
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', OFFLINE_DEFAULT_LIMIT_BYTES)!
+  try {
+    expect(await capture.ready).toBe(false)
+    await cachePlayedTrack('alice', track('1'), '320k')
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(await listOfflineTracks('alice')).toHaveLength(1)
+  } finally { capture.cancel(); port.close() }
+})
+
 it('页面等待缓存超过 5 分钟只发送 cancel-cache，仍保留播放源用于后续主动释放', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   let port!: MessagePort

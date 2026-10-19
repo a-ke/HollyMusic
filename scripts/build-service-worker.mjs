@@ -4,6 +4,7 @@ import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { Script } from 'node:vm'
 import path from 'node:path'
+import { loadServiceWorkerSource } from './service-worker-source.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const SHELL_RESOURCES = [
@@ -23,7 +24,7 @@ export async function buildServiceWorker(projectRoot = root) {
     .filter(file => !file.endsWith('.map'))
     .map(file => '/' + path.relative(dist, file).split(path.sep).join('/'))
   const resources = [...new Set([...SHELL_RESOURCES, ...assets])].sort()
-  const source = await readFile(path.join(projectRoot, 'public/sw.js'), 'utf8')
+  const source = await loadServiceWorkerSource(projectRoot)
   const hash = createHash('sha256').update(source)
   for (const resource of resources) {
     hash.update(resource)

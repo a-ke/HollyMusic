@@ -3,6 +3,9 @@ import { getOfflineAudioCacheName, getOfflineAudioCacheKey } from '@/lib/offline
 import { VALID_QUALITIES } from '@/lib/quality-options'
 import { logger } from '@/lib/logger'
 import type { QualityType } from '@/lib/types/music'
+import { PLAYBACK_MESSAGE as MESSAGE, PLAYBACK_PROTOCOL_VERSION, PLAYBACK_DATA_CACHE,
+  isCompatiblePlaybackVersion, isPlaybackWorkerReply, isPlaybackDataLocation, parsePlaybackManifest,
+  type PlaybackWorkerCommand, type PlaybackPortCommand } from '@/lib/playback-protocol'
 
 /** 播放响应通过专属 MessagePort 返回，不在不同页面或账号间广播音频。 */
 export interface PlaybackResponseCapture {
@@ -17,20 +20,10 @@ const keyFor = (username: string, url: string) => `${username}:${url}`
 
 /** 完整下载通知只携带分块清单，按需逐块读取，避免把整首音频带回页面内存。 */
 async function readStagedAudio(cacheKey: string, captureId: string, limit: number, reportFailure: (error: unknown) => void): Promise<Response | null> {
-  const cache = await caches.open('holly-playback-data-v1')
+  const cache = await caches.open(PLAYBACK_DATA_CACHE)
   const response = await cache.match(cacheKey)
   if (!response) return null
-  const manifest = await response.json() as { version: number; size: number; headers: Record<string, string>; chunks: Array<{ key: string; length: number }> }
-  if (manifest.version !== 1 || !Number.isSafeInteger(manifest.size) || manifest.size <= 0 || manifest.size > limit
-    || !Array.isArray(manifest.chunks) || manifest.headers?.['content-length'] !== String(manifest.size)) throw new Error('播放缓存清单格式或大小无效')
-  const base = cacheKey.slice(0, -'complete'.length)
-  let total = 0
-  for (const [index, chunk] of manifest.chunks.entries()) {
-    if (chunk.key !== `${base}${index}` || !base.endsWith(`/${captureId}/`)
-      || !Number.isSafeInteger(chunk.length) || chunk.length <= 0 || chunk.length > 256 * 1024) throw new Error('播放缓存分块清单无效')
-    total += chunk.length
-  }
-  if (total !== manifest.size) throw new Error('播放缓存清单总长度不一致')
+  const manifest = parsePlaybackManifest(await response.json(), cacheKey, captureId, limit)
   let index = 0
   let cancelled = false
   return new Response(new ReadableStream<Uint8Array>({
@@ -80,6 +73,7 @@ export function preparePlaybackResponse(username: string, url: string, limit: nu
   let resolveReady!: (ready: boolean) => void
   let resolveAvailable!: () => void
   let stored = false
+  let accepted = false
   let readFailureReported = false
   const reportReadFailure = (error: unknown) => {
     if (readFailureReported) return
@@ -103,7 +97,7 @@ export function preparePlaybackResponse(username: string, url: string, limit: nu
       return available.then(async () => {
         if (!source) return null
         if ('response' in source) return source.response.clone()
-        if (source.cacheName === 'holly-playback-data-v1') return readStagedAudio(source.cacheKey, captureId, limit, reportReadFailure)
+        if (source.cacheName === PLAYBACK_DATA_CACHE) return readStagedAudio(source.cacheKey, captureId, limit, reportReadFailure)
         return (await caches.open(source.cacheName)).match(source.cacheKey).then(value => value ?? null)
       }).catch(error => {
         reportReadFailure(error)
@@ -115,19 +109,20 @@ export function preparePlaybackResponse(username: string, url: string, limit: nu
       source = { cacheName: getOfflineAudioCacheName(username), cacheKey: getOfflineAudioCacheKey(uid, quality) }
       resolveAvailable()
       clearTimers()
-      channel.port1.postMessage({ type: 'cached' })
+      channel.port1.postMessage({ type: MESSAGE.CACHED } satisfies PlaybackPortCommand)
       try {
-        navigator.serviceWorker?.controller?.postMessage({ type: 'holly-cached-audio', url: audioUrl.href, captureId })
+        navigator.serviceWorker?.controller?.postMessage({ type: MESSAGE.CACHED_AUDIO, url: audioUrl.href, captureId,
+          protocolVersion: PLAYBACK_PROTOCOL_VERSION } satisfies PlaybackWorkerCommand)
       } catch { /* 持久缓存已完成，SW 更新期间的通知失败不影响播放。 */ }
     },
     cancel: (preservePlayback = false) => {
       // 完整下载结束后仍需保留端口，以便切歌时释放 SW 为后续 Range 保留的数据。
-      channel.port1.postMessage({ type: preservePlayback ? 'cancel-cache' : 'cancel' })
+      channel.port1.postMessage({ type: preservePlayback ? MESSAGE.CANCEL_CACHE : MESSAGE.CANCEL } satisfies PlaybackPortCommand)
       // 端口属于旧 SW 运行实例，因此也通知当前 controller。
       // 仅真正释放播放源时撤销持久登记；取消缓存写入仍保留后续 Range 的读取路径。
       try {
-        navigator.serviceWorker?.controller?.postMessage({ type: 'holly-release-audio',
-          url: audioUrl.href, captureId, preservePlayback })
+        navigator.serviceWorker?.controller?.postMessage({ type: MESSAGE.RELEASE,
+          url: audioUrl.href, captureId, preservePlayback, protocolVersion: PLAYBACK_PROTOCOL_VERSION } satisfies PlaybackWorkerCommand)
       } catch { /* 页面离开或 controller 已失效时，缓存取消仍须正常完成。 */ }
       source = null
       resolveAvailable()
@@ -141,22 +136,24 @@ export function preparePlaybackResponse(username: string, url: string, limit: nu
   // 缓存到期只能停止落盘，不能释放 Audio 正在读取的共享下载。
   const downloadTimeout = setTimeout(() => capture.cancel(true), 5 * 60_000)
   channel.port1.onmessage = event => {
-    const data = event.data
-    if (data?.type === 'ready') {
+    const data: unknown = event.data
+    if (!isPlaybackWorkerReply(data)) return
+    if (!isCompatiblePlaybackVersion(data.protocolVersion)) { capture.cancel(); return }
+    if (data.type === MESSAGE.READY) {
+      accepted = true
       clearTimeout(handshakeTimeout)
       resolveReady(true)
-    } else if (data?.type === 'complete' && !stored) {
-      if (data.cacheName === 'holly-playback-data-v1' && typeof data.cacheKey === 'string'
-        && new URL(data.cacheKey, audioUrl).origin === audioUrl.origin
-        && new URL(data.cacheKey, audioUrl).pathname.endsWith(`/${captureId}/complete`)) {
+    } else if (data.type === MESSAGE.COMPLETE && !stored) {
+      if ('cacheName' in data && data.cacheName === PLAYBACK_DATA_CACHE && isPlaybackDataLocation(data.cacheKey, captureId, audioUrl.origin)) {
         source = { cacheName: data.cacheName, cacheKey: data.cacheKey }
-      } else if (data.blob instanceof Blob && data.blob.size <= 8 * 1024 * 1024) {
+      } else if ('blob' in data && data.blob.size <= 8 * 1024 * 1024) {
         // 与旧 SW 的短暂兼容；现代协议不传完整 Blob。
         source = { response: new Response(data.blob, { headers: data.headers }) }
       }
       resolveAvailable()
       clearTimers()
-    } else if (data?.type === 'unavailable' && !stored) {
+    } else if (data.type === MESSAGE.UNAVAILABLE && !stored) {
+      if (!accepted) { capture.cancel(); return }
       source = null
       resolveAvailable()
       resolveReady(false)
@@ -166,8 +163,8 @@ export function preparePlaybackResponse(username: string, url: string, limit: nu
   channel.port1.onmessageerror = () => capture.cancel()
   captures.set(key, capture)
   try {
-    worker.postMessage({ type: 'holly-capture-audio', url: audioUrl.href, limit, captureId,
-      cacheName: getOfflineAudioCacheName(username), cacheKey: getOfflineAudioCacheKey(uid, quality) }, [channel.port2])
+    worker.postMessage({ type: MESSAGE.CAPTURE, url: audioUrl.href, limit, captureId, protocolVersion: PLAYBACK_PROTOCOL_VERSION,
+      cacheName: getOfflineAudioCacheName(username), cacheKey: getOfflineAudioCacheKey(uid, quality) } satisfies PlaybackWorkerCommand, [channel.port2])
   } catch {
     capture.cancel()
     return null

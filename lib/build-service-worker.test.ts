@@ -4,15 +4,17 @@ import path from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { buildServiceWorker } from '../scripts/build-service-worker.mjs'
+import { loadServiceWorkerSource } from '../scripts/service-worker-source.mjs'
 
 let project: string
 const workerSource = new URL('../public/sw.js', import.meta.url)
 beforeEach(async () => {
   project = await mkdtemp(path.join(tmpdir(), 'holly-sw-build-'))
-  for (const directory of ['public', 'frontend/dist/assets', 'frontend/dist/icons']) {
+  for (const directory of ['public', 'lib', 'frontend/dist/assets', 'frontend/dist/icons']) {
     await mkdir(path.join(project, directory), { recursive: true })
   }
   await writeFile(path.join(project, 'public/sw.js'), await readFile(workerSource))
+  await writeFile(path.join(project, 'lib/playback-protocol.ts'), await readFile(new URL('./playback-protocol.ts', import.meta.url)))
   for (const resource of ['index.html', 'manifest.json', 'icon.svg', 'theme-init.js', 'assets/app.js',
     'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png']) {
     await writeFile(path.join(project, 'frontend/dist', resource), resource)
@@ -61,13 +63,20 @@ it('相同输入版本稳定，资源或 Worker 内容变化都会改变版本',
   expect((await buildServiceWorker(project)).version).not.toBe(second.version)
 })
 
+it('共享协议变更会更新 Worker 内容版本', async () => {
+  const first = await buildServiceWorker(project)
+  const file = path.join(project, 'lib/playback-protocol.ts')
+  await writeFile(file, (await readFile(file, 'utf8')).replace('holly-playback-data-v1', 'holly-playback-data-v2'))
+  expect((await buildServiceWorker(project)).version).not.toBe(first.version)
+})
+
 it.each(['theme-init.js', 'icons/icon-192.png'])('必需资源 %s 缺失时构建失败', async resource => {
   await rm(path.join(project, 'frontend/dist', resource))
   await expect(buildServiceWorker(project)).rejects.toThrow()
 })
 
 it('生产 Worker 缺少构建配置时明确失败，开发 Worker 可直接运行', async () => {
-  const source = await readFile(workerSource, 'utf8')
+  const source = await loadServiceWorkerSource(project)
   const context = (mode: string) => ({ self: { location: { href: `https://holly.test/sw.js${mode}` }, addEventListener: vi.fn() }, URL })
   expect(() => runInNewContext(source, context(''))).toThrow('SW 缺少有效构建配置')
   expect(() => runInNewContext(source, context('?mode=development'))).not.toThrow()

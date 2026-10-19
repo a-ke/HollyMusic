@@ -1,6 +1,10 @@
-import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { createContext, runInContext } from 'node:vm'
 import { expect, it, vi } from 'vitest'
+import { loadServiceWorkerSource } from '../scripts/service-worker-source.mjs'
+import { preparePlaybackResponse } from './playback-response'
+
+const workerSource = await loadServiceWorkerSource(fileURLToPath(new URL('../', import.meta.url)))
 
 function worker(development = false, storage?: ReturnType<typeof memoryCaches>) {
   const handlers: Record<string, (event: unknown) => void> = {}
@@ -24,7 +28,7 @@ function worker(development = false, storage?: ReturnType<typeof memoryCaches>) 
     self, caches, fetch, URL, Set, Map, Blob, setTimeout, clearTimeout,
     Request: WorkerRequest, Response, Headers, ReadableStream, AbortSignal, AbortController,
   })
-  runInContext(readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8'), context)
+  runInContext(workerSource, context)
   const inspect = () => runInContext(`({ bytes: audioMemoryBytes, writeBytes: audioWriteBytes, entries: [...audioCaptures.values()].map(entry => ({
     chunkCount: entry.chunks.length, resident: entry.chunks.reduce((sum, chunk) => sum + (chunk.data?.byteLength || 0), 0),
     persisted: !!entry.persisted, bodies: entry.bodies.size
@@ -74,6 +78,61 @@ function registerAudio(handlers: ReturnType<typeof worker>['handlers'], client =
   expect(port.postMessage).toHaveBeenCalledWith({ type: 'ready' })
   return port
 }
+
+it.each([1, 2])('显式协议版本 %s 在兼容时握手，不兼容时拒绝且保留已有播放', async protocolVersion => {
+  const current = worker()
+  const old = registerAudio(current.handlers)
+  const port = { postMessage: vi.fn(), close: vi.fn(), onmessage: null as null | ((event: unknown) => void) }
+  const lifetimes: Promise<void>[] = []
+  current.handlers.message({ data: { type: 'holly-capture-audio', protocolVersion,
+    url: 'https://holly.test/api/audio?uid=kw-1', limit: 100 }, source: { id: 'alice-tab' }, ports: [port],
+    waitUntil: (value: Promise<void>) => { lifetimes.push(value) } })
+  await Promise.all(lifetimes)
+  expect(port.postMessage).toHaveBeenCalledWith({ type: protocolVersion === 1 ? 'ready' : 'unavailable', protocolVersion: 1 })
+  expect(old.close).toHaveBeenCalledTimes(protocolVersion === 1 ? 1 : 0)
+  expect(current.inspect().entries).toHaveLength(1)
+  if (protocolVersion === 1) port.onmessage!({ data: { type: 'cancel' } })
+  else old.onmessage!({ data: { type: 'cancel' } })
+})
+
+it('真实页面与编译后的 SW 通过 MessageChannel 完成握手、分块读取、确认和释放', async () => {
+  const storage = memoryCaches()
+  const current = worker(false, storage)
+  const lifetimes: Promise<void>[] = []
+  const commands: Array<{ type: string; protocolVersion?: number }> = []
+  const endpoint = { postMessage(data: { type: string; protocolVersion?: number }, ports?: MessagePort[]) {
+    commands.push(data)
+    current.handlers.message({ data, source: { id: 'alice-tab' }, ports,
+      waitUntil: (promise: Promise<void>) => { lifetimes.push(promise) } })
+  } }
+  vi.stubGlobal('window', { isSecureContext: true, caches: {}, location: { origin: 'https://holly.test' } })
+  vi.stubGlobal('navigator', { serviceWorker: { controller: endpoint } })
+  vi.stubGlobal('caches', storage)
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', 100)!
+  try {
+    expect(await capture.ready).toBe(true)
+    expect(commands[0]).toMatchObject({ type: 'holly-capture-audio', protocolVersion: 1 })
+    current.fetch.mockResolvedValueOnce(new Response('abcdefgh', { headers: { 'content-type': 'audio/mpeg', 'content-length': '8' } }))
+    let playing!: Promise<Response>
+    current.handlers.fetch({ clientId: 'alice-tab', request: new Request('https://holly.test/api/audio?uid=kw-1&quality=320k',
+      { headers: { range: 'bytes=2-4' } }), respondWith: (value: Promise<Response>) => { playing = value },
+      waitUntil: (value: Promise<void>) => { lifetimes.push(value) } })
+    expect(await (await playing).text()).toBe('cde')
+    const response = await capture.response
+    expect(response).not.toBeNull()
+    expect(await response!.clone().text()).toBe('abcdefgh')
+    await (await storage.open('holly-audio-v1:alice')).put('https://holly.test/__offline_audio/kw-1/320k', response!)
+    capture.cached()
+    await vi.waitFor(() => expect(current.inspect().entries[0].persisted).toBe(true))
+    expect(current.fetch).toHaveBeenCalledOnce()
+    expect(await (await capture.response)!.text()).toBe('abcdefgh')
+  } finally {
+    capture.cancel()
+    await Promise.all(lifetimes)
+    vi.unstubAllGlobals()
+  }
+  expect(current.inspect().entries).toHaveLength(0)
+})
 
 it('播放与缓存复用一次完整 Range 响应，拖拽取消旧播放后仍补齐完整数据', async () => {
   const { handlers, fetch, caches } = worker()
