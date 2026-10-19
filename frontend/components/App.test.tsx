@@ -9,6 +9,9 @@ import type { Track } from '@/lib/types/player'
 vi.mock('../src/components/Layout', () => ({ Sidebar: () => null, MobileSidebar: () => null }))
 vi.mock('../src/components/MobileHeader', () => ({ MobileHeader: () => null }))
 vi.mock('../src/components/ServiceWorkerRegister', () => ({ ServiceWorkerRegister: () => null }))
+vi.mock('../src/hooks/useLyricsHistory', () => ({
+  useLyricsHistory: () => ({ isOpen: false, open: () => {}, close: () => {}, toggle: () => {} }),
+}))
 vi.mock('@/components/player/PlayerBar', () => ({ PlayerBar: () => null }))
 vi.mock('@/components/player/QueuePanel', () => ({ QueuePanel: () => null }))
 vi.mock('@/components/player/LyricsPanel', () => ({ LyricsPanel: () => null }))

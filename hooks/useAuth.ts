@@ -10,10 +10,12 @@
 
 import { create } from 'zustand'
 import { getMe, login as apiLogin, logout as apiLogout, heartbeat, changePassword as apiChangePassword, setup as apiSetup } from '@/lib/api/auth'
+import { offlineIdentity, cancelOfflineDownloads } from '@/lib/offline-audio'
 
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let authRequestId = 0
 
 function startHeartbeat() {
   stopHeartbeat()
@@ -23,7 +25,9 @@ function startHeartbeat() {
         if (result === 'unauthorized') {
           // 服务端会话已失效（如该账号在别处改了密码），本地强制下线并停止心跳
           stopHeartbeat()
-          useAuthStore.setState({ authenticated: false, username: null, mustChangePassword: false })
+          offlineIdentity.remove()
+          cancelOfflineDownloads()
+          useAuthStore.setState({ authenticated: false, username: null, offlineUsername: null, mustChangePassword: false })
         }
       })
       .catch(() => {})
@@ -38,10 +42,15 @@ function stopHeartbeat() {
 }
 
 interface AuthStore {
+  /** 会话校验完成的版本；同账号重新认证也会变化。仅保存在内存。 */
+  sessionRevision: number
+  /** 仅能读取本机歌曲，不授予服务端会话权限。 */
+  offlineUsername: string | null
   authenticated: boolean | null
   username: string | null
   /** 是否需要强制修改密码（首次登录/管理员重置后为 true） */
   mustChangePassword: boolean
+  /** 是否有有效的 init 会话校验；表单提交状态由页面单独管理。 */
   loading: boolean
   setupRequired: boolean | null
   setupRecoveryRequired: boolean
@@ -55,7 +64,9 @@ interface AuthStore {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
 }
 
-export const useAuthStore = create<AuthStore>((set) => ({
+export const useAuthStore = create<AuthStore>((set, get) => ({
+  sessionRevision: 0,
+  offlineUsername: null,
   authenticated: null,
   username: null,
   mustChangePassword: false,
@@ -66,25 +77,48 @@ export const useAuthStore = create<AuthStore>((set) => ({
   error: null,
 
   init: async () => {
+    const requestId = ++authRequestId
     set({ loading: true, error: null })
     try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) throw new TypeError('设备已离线')
       const me = await getMe()
-      set({ authenticated: me.authenticated, username: me.username, mustChangePassword: me.mustChangePassword,
+      if (requestId !== authRequestId) return
+      // 同账号校验成功时保留当前完整下载与排队任务；换号/失效才撤销。
+      const previous = get()
+      if (!me.authenticated || !me.username || me.mustChangePassword
+        || !previous.authenticated || previous.username !== me.username) cancelOfflineDownloads()
+      if (me.authenticated && me.username && !me.mustChangePassword) offlineIdentity.write(me.username)
+      else offlineIdentity.remove()
+      set(state => ({ authenticated: me.authenticated, username: me.username, mustChangePassword: me.mustChangePassword,
+        offlineUsername: null,
         setupRequired: me.setupRequired, setupRecoveryRequired: me.setupRecoveryRequired,
-        setupTokenRequired: me.setupTokenRequired, loading: false, error: null })
+        setupTokenRequired: me.setupTokenRequired, loading: false, error: null, sessionRevision: state.sessionRevision + 1 }))
       if (me.authenticated) startHeartbeat()
       else stopHeartbeat()
     } catch (error) {
+      if (requestId !== authRequestId) return
       stopHeartbeat()
+      cancelOfflineDownloads()
+      if (error && typeof error === 'object' && 'status' in error && (error.status === 401 || error.status === 403)) {
+        offlineIdentity.remove()
+        set({ authenticated: false, username: null, offlineUsername: null, loading: false, error: null })
+        return
+      }
+      const offlineUsername = offlineIdentity.read()
       set({ authenticated: null, username: null, mustChangePassword: false, setupRequired: null,
-        loading: false, error: error instanceof Error ? error.message : '暂时无法连接服务' })
+        offlineUsername, loading: false, error: offlineUsername ? null : error instanceof Error ? error.message : '暂时无法连接服务' })
     }
   },
 
   setup: async (password, confirmation, token) => {
+    ++authRequestId
+    // 旧 init 已失效，同步结束它的 loading，避免依赖不会再写回状态的旧响应。
+    set({ loading: false })
     try {
       await apiSetup(password, confirmation, token)
+      offlineIdentity.write('admin')
       set({ authenticated: true, username: 'admin', mustChangePassword: false,
+        offlineUsername: null,
         setupRequired: false, setupRecoveryRequired: false, setupTokenRequired: false, error: null })
       startHeartbeat()
     } catch (error) {
@@ -94,19 +128,31 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 
   login: async (username, password) => {
+    ++authRequestId
+    set({ loading: false })
     const res = await apiLogin(username, password)
-    set({ authenticated: true, username: res.username, mustChangePassword: res.mustChangePassword, error: null })
+    const previous = get()
+    if (!previous.authenticated || previous.username !== res.username || res.mustChangePassword) cancelOfflineDownloads()
+    if (!res.mustChangePassword) offlineIdentity.write(res.username)
+    else offlineIdentity.remove()
+    set({ authenticated: true, username: res.username, offlineUsername: null, mustChangePassword: res.mustChangePassword, error: null })
     startHeartbeat()
   },
 
   logout: async () => {
+    ++authRequestId
+    set({ loading: false })
     stopHeartbeat()
     await apiLogout()
-    set({ authenticated: false, username: null, mustChangePassword: false })
+    offlineIdentity.remove()
+    cancelOfflineDownloads()
+    set({ authenticated: false, username: null, offlineUsername: null, mustChangePassword: false })
   },
 
   changePassword: async (currentPassword, newPassword) => {
     await apiChangePassword(currentPassword, newPassword)
+    const username = useAuthStore.getState().username
+    if (username) offlineIdentity.write(username)
     set({ mustChangePassword: false })
   },
 }))

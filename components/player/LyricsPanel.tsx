@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { usePlayerStore } from '@/lib/store/player-store'
 import { useAppearanceStore } from '@/lib/store/appearance-store'
 import { useLyrics } from '@/hooks/useLyrics'
+import { useLyricsPanel } from '@/hooks/useLyricsPanel'
 import { CoverImage } from '@/components/shared/CoverImage'
 import { AudioSpectrum } from './AudioSpectrum'
 import { ChevronDown } from 'lucide-react'
@@ -14,9 +15,8 @@ interface LyricsPanelProps {
 }
 
 export function LyricsPanel({ audio }: LyricsPanelProps) {
-  const isOpen = usePlayerStore(s => s.isLyricsOpen)
+  const { isOpen, close } = useLyricsPanel()
   const coverAtmosphere = useAppearanceStore(s => s.coverAtmosphere)
-  const setLyricsOpen = usePlayerStore(s => s.setLyricsOpen)
   const track = usePlayerStore(s => s.currentTrack)
   const currentTime = usePlayerStore(s => s.currentTime)
   const isPlaying = usePlayerStore(s => s.isPlaying)
@@ -32,11 +32,11 @@ export function LyricsPanel({ audio }: LyricsPanelProps) {
       if (e.key !== 'Escape') return
       const t = e.target
       if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
-      setLyricsOpen(false)
+      close()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, setLyricsOpen])
+  }, [isOpen, close])
 
   // 当前行变化 → 平滑滚动到中央
   useEffect(() => {
@@ -61,7 +61,7 @@ export function LyricsPanel({ audio }: LyricsPanelProps) {
       {/* 顶部：极简返回箭头（safe-area 保护，避开状态栏/刘海） */}
       <div className="safe-header flex shrink-0 items-center px-2">
         <button
-          onClick={() => setLyricsOpen(false)}
+          onClick={close}
           className="touch-target flex items-center justify-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground"
           aria-label="收起歌词"
         >

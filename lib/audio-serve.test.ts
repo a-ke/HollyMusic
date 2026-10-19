@@ -52,7 +52,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 let cacheDir = ''
 let dirSeq = 0
-let originalFetch: typeof globalThis.fetch
+const originalFetch = globalThis.fetch
 
 /** 生成确定性伪随机字节块（总大小 total，分 chunkCount 块） */
 function makeChunks(total: number, chunkCount: number): Buffer[] {
@@ -118,6 +118,31 @@ afterEach(async () => {
   delete process.env.AUDIO_CACHE_DIR
   await fsp.rm(cacheDir, { recursive: true, force: true }).catch(() => {})
   vi.restoreAllMocks()
+})
+
+it('禁用文件缓存时仍透传 Range 和音频校验响应头', async () => {
+  const previous = process.env.ENABLE_FILE_CACHE
+  process.env.ENABLE_FILE_CACHE = 'false'
+  _resetAudioServeConfigForTest()
+  const fetch = vi.fn(async () => new Response('abcdefgh', { status: 206, headers: {
+    'content-type': 'audio/mpeg', 'content-length': '8', 'content-range': 'bytes 0-7/8',
+    'accept-ranges': 'bytes', etag: '"song-v1"', 'last-modified': 'Sun, 18 Oct 2026 12:00:00 GMT',
+  } }))
+  globalThis.fetch = fetch
+  try {
+    const response = await audioServe.serve({ cacheKey: 'kw:passthrough:320k',
+      upstreamUrlResolver: resolver(), rangeHeader: 'bytes=0-', isHead: false })
+    expect(response.status).toBe(206)
+    expect(response.headers.get('content-range')).toBe('bytes 0-7/8')
+    expect(response.headers.get('accept-ranges')).toBe('bytes')
+    expect(response.headers.get('etag')).toBe('"song-v1"')
+    expect(response.headers.get('last-modified')).toBe('Sun, 18 Oct 2026 12:00:00 GMT')
+    expect(await response.text()).toBe('abcdefgh')
+  } finally {
+    if (previous === undefined) delete process.env.ENABLE_FILE_CACHE
+    else process.env.ENABLE_FILE_CACHE = previous
+    _resetAudioServeConfigForTest()
+  }
 })
 
 // ===========================================================================

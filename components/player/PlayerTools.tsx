@@ -5,6 +5,7 @@
  */
 
 import { usePlayerStore } from '@/lib/store/player-store'
+import { useLyricsPanel } from '@/hooks/useLyricsPanel'
 import { ProgressBar } from './ProgressBar'
 import { PlayerButton } from './PlayerButton'
 import { Mic2, ListMusic, Timer, Volume2, VolumeX } from 'lucide-react'
@@ -15,7 +16,7 @@ export function PlayerTools() {
   const setVolume = usePlayerStore(s => s.setVolume)
   const toggleMute = usePlayerStore(s => s.toggleMute)
   const toggleQueue = usePlayerStore(s => s.toggleQueue)
-  const toggleLyrics = usePlayerStore(s => s.toggleLyrics)
+  const { toggle: toggleLyrics } = useLyricsPanel()
   const sleepTimer = usePlayerStore(s => s.sleepTimer)
   const cycleSleepTimer = usePlayerStore(s => s.cycleSleepTimer)
 

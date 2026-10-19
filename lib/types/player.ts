@@ -18,6 +18,8 @@ export interface Track {
   duration: number // 秒
   source: SourceType
   musicInfo: MusicInfo // 完整数据，用于获取播放 URL
+  /** 本地队列项绑定缓存音质，切歌、插播和恢复会话时仍只读取本地。 */
+  playback?: { source: 'local'; quality: QualityType }
 }
 
 /** interval（"mm:ss" / "h:mm:ss" / 数字）解析为秒 */

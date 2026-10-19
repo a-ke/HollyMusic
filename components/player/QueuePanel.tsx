@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { usePlayerStore } from '@/lib/store/player-store'
 import { CoverImage } from '@/components/shared/CoverImage'
 import { X, Trash2 } from 'lucide-react'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 export function QueuePanel() {
   const isOpen = usePlayerStore(s => s.isQueueOpen)
@@ -35,9 +36,9 @@ export function QueuePanel() {
   if (!isOpen) return null
 
   return (
-    <div
+    <ModalMask
       className="safe-screen fixed inset-0 z-40 flex justify-end bg-black/50"
-      onClick={() => setQueueOpen(false)}
+      onClose={() => setQueueOpen(false)}
       role="dialog"
       aria-modal="true"
       aria-label="播放队列"
@@ -151,6 +152,6 @@ export function QueuePanel() {
           )}
         </div>
       </div>
-    </div>
+    </ModalMask>
   )
 }

@@ -5,12 +5,13 @@
  * 刻意分离：本模块只关心播放器「用户偏好 + 实际播放」的音质决策。
  */
 import type { QualityInfo, QualityType } from '@/lib/types/music'
+import { PLAYBACK_QUALITIES } from '@/lib/playback-protocol'
 
 /** 合法音质，按从高到低排序（index 0 = 最高） */
 export const QUALITY_ORDER: QualityType[] = ['flac24bit', 'flac', '320k', '128k']
 
 /** 合法音质集合（用于校验 localStorage 持久化值） */
-export const VALID_QUALITIES: QualityType[] = ['128k', '320k', 'flac', 'flac24bit']
+export const VALID_QUALITIES: QualityType[] = [...PLAYBACK_QUALITIES]
 
 /** 音质按钮 / 标签的简短文案 */
 export const QUALITY_LABEL: Record<QualityType, string> = {

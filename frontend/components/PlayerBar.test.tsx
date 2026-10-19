@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PlayerBar } from '@/components/player/PlayerBar'
 import { usePlayerStore } from '@/lib/store/player-store'
 import { toTrack } from '@/lib/types/player'
+import { useAuthStore } from '@/hooks/useAuth'
+import * as offlineAudio from '@/lib/offline-audio'
+import * as playbackResponse from '@/lib/playback-response'
 
 // 保留真实的 PC/手机按钮、进度条、store 和音频 hook，只隔离附属服务与音频硬件。
 vi.mock('@/hooks/useMediaSession', () => ({ useMediaSession: () => {} }))
@@ -23,7 +26,7 @@ class TestAudio extends EventTarget {
   readyState = 0
   duration = NaN
   currentTime = 0
-  error = null
+  error: { code: number } | null = null
   load = vi.fn(() => { this.currentTime = 0; this.readyState = 0; this.duration = NaN })
   play = vi.fn(async () => { this.paused = false; this.ended = false })
   pause = vi.fn(() => { this.paused = true })
@@ -93,9 +96,208 @@ afterEach(async () => {
   usePlayerStore.getState().clearSleepTimer()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe('PC 与移动端共用播放器', () => {
+  it.each([
+    { entry: '恢复播放', resume: false },
+    { entry: '恢复播放', resume: true },
+    { entry: '首次选歌', resume: false },
+  ])('$entry 等待缓存时可通过按钮暂停，再次继续=$resume 时复用同一查询', async ({ entry, resume }) => {
+    const auth = useAuthStore.getState()
+    let resolve!: (value: { url: string; quality: '320k' }) => void
+    const pending = new Promise<{ url: string; quality: '320k' }>(done => { resolve = done })
+    const readCache = vi.spyOn(offlineAudio, 'getOfflineAudio').mockReturnValue(pending)
+    vi.stubGlobal('URL', class extends URL { static revokeObjectURL = vi.fn() })
+    try {
+      await act(async () => {
+        useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null, loading: false })
+        usePlayerStore.getState().restorePlayback({ queue: [track], playNextQueue: [], currentIndex: 0,
+          currentTrack: track, currentTime: 42, isCurrentTempPlay: false })
+      })
+      if (entry === '恢复播放') await click(container.querySelector('button[aria-label="播放"]'))
+      else await act(async () => { void usePlayerStore.getState().playTrack(second, [second]) })
+      expect(usePlayerStore.getState()).toMatchObject({ isFetchingUrl: true, isPlaying: true })
+      await click(container.querySelector('button[aria-label="暂停"]'))
+      expect(usePlayerStore.getState().isPlaying).toBe(false)
+      if (resume) await click(container.querySelector('button[aria-label="播放"]'))
+      expect(readCache).toHaveBeenCalledOnce()
+      await act(async () => {
+        resolve({ url: 'blob:pending-playback', quality: '320k' })
+        await pending
+      })
+      await ready()
+      expect(audio.src).toBe('blob:pending-playback')
+      expect(audio.paused).toBe(!resume)
+      expect(usePlayerStore.getState()).toMatchObject({ isFetchingUrl: false, isPlaying: resume,
+        currentTime: entry === '恢复播放' ? 42 : 0 })
+      expect(readCache).toHaveBeenCalledOnce()
+    } finally { await act(async () => { useAuthStore.setState(auth, true) }) }
+  })
+
+  it.each(['pause-and-seek', 'switch-track'])('等待 SW 登记期间仍尊重用户的 %s 操作', async action => {
+    const auth = useAuthStore.getState()
+    let resolve!: (ready: boolean) => void
+    const cancel = vi.fn()
+    const capture = { ready: new Promise<boolean>(done => { resolve = done }), response: Promise.resolve(null), cancel, cached: vi.fn() }
+    vi.spyOn(playbackResponse, 'preparePlaybackResponse').mockReturnValueOnce(capture).mockReturnValue(null)
+    try {
+      await act(async () => {
+        useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null, loading: false, mustChangePassword: false })
+        await usePlayerStore.getState().playTrack(second, [track, second])
+      })
+      expect(audio.src).toBe('')
+      await act(async () => {
+        if (action === 'pause-and-seek') {
+          usePlayerStore.getState().setIsPlaying(false)
+          usePlayerStore.getState().seek(75)
+        } else await usePlayerStore.getState().playTrack(track, [track, second])
+      })
+      await act(async () => { resolve(true) })
+      await ready()
+      if (action === 'pause-and-seek') {
+        expect(audio.src).toContain('kw-second')
+        expect(audio.currentTime).toBe(75)
+        expect(audio.paused).toBe(true)
+      } else {
+        expect(audio.src).toContain('kw-first')
+        expect(cancel).toHaveBeenCalled()
+      }
+    } finally { await act(async () => { useAuthStore.setState(auth, true) }) }
+  })
+
+  it.each(['reconnect', 'same-state'])('同账号认证成功后重新触发当前歌曲缓存（%s），不重新加载音频', async mode => {
+    const auth = useAuthStore.getState()
+    vi.useFakeTimers()
+    const cache = vi.spyOn(offlineAudio, 'cachePlayedTrack').mockResolvedValue()
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+    try {
+      await act(async () => {
+        useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null, loading: false, mustChangePassword: false })
+        await usePlayerStore.getState().loadStreamUrl(track)
+      })
+      await act(async () => { vi.advanceTimersByTime(3000) })
+      expect(cache).toHaveBeenCalledTimes(1)
+      const url = audio.src
+      const loads = audio.load.mock.calls.length
+      if (mode === 'reconnect') {
+        await act(async () => {
+          online.mockReturnValue(false)
+          offlineAudio.cancelOfflineDownloads()
+          useAuthStore.setState({ authenticated: null, username: null, offlineUsername: 'alice' })
+        })
+        await act(async () => {
+          online.mockReturnValue(true)
+          useAuthStore.setState({ loading: true })
+        })
+        await act(async () => { vi.advanceTimersByTime(3000) })
+        expect(cache).toHaveBeenCalledTimes(1)
+      }
+      await act(async () => {
+        useAuthStore.setState(state => ({ authenticated: true, username: 'alice', offlineUsername: null,
+          loading: false, sessionRevision: state.sessionRevision + 1 }))
+      })
+      await act(async () => { vi.advanceTimersByTime(3000) })
+      expect(cache).toHaveBeenCalledTimes(2)
+      expect(cache).toHaveBeenLastCalledWith('alice', track, '320k')
+      expect(audio.src).toBe(url)
+      expect(audio.load).toHaveBeenCalledTimes(loads)
+    } finally { await act(async () => { useAuthStore.setState(auth, true) }) }
+  })
+
+  it.each(['paused', 'other-account', 'expired', 'must-change-password', 'blob'])('重新认证时遇到 %s，不给当前音频重复或跨账号缓存', async reason => {
+    const auth = useAuthStore.getState()
+    vi.useFakeTimers()
+    const cache = vi.spyOn(offlineAudio, 'cachePlayedTrack').mockResolvedValue()
+    vi.stubGlobal('URL', class extends URL { static revokeObjectURL = vi.fn() })
+    try {
+      await act(async () => {
+        useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null, loading: false, mustChangePassword: false })
+        await usePlayerStore.getState().loadStreamUrl(track)
+      })
+      await act(async () => { vi.advanceTimersByTime(3000) })
+      cache.mockClear()
+      await act(async () => {
+        if (reason === 'paused') usePlayerStore.getState().setIsPlaying(false)
+        if (reason === 'blob') usePlayerStore.setState({ streamUrl: 'blob:local' })
+        useAuthStore.setState(state => ({ authenticated: reason !== 'expired', username: reason === 'other-account' ? 'bob' : 'alice',
+          mustChangePassword: reason === 'must-change-password', sessionRevision: state.sessionRevision + 1 }))
+      })
+      await ready()
+      await act(async () => { vi.advanceTimersByTime(3000) })
+      expect(cache).not.toHaveBeenCalled()
+    } finally { await act(async () => { useAuthStore.setState(auth, true) }) }
+  })
+
+  it.each(['blob', 'network'])('切到 B 的缓存读取期间立即丢弃 A 的结束、进度及错误事件（%s）', async result => {
+    const auth = useAuthStore.getState()
+    await act(async () => { useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null }) })
+    const third = makeTrack('third')
+    let resolve!: (value: { url: string; quality: '320k' } | null) => void
+    vi.spyOn(offlineAudio, 'getOfflineAudio').mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    vi.stubGlobal('URL', class extends URL { static revokeObjectURL = vi.fn() })
+    vi.stubGlobal('MediaError', { MEDIA_ERR_ABORTED: 1, MEDIA_ERR_NETWORK: 2,
+      MEDIA_ERR_DECODE: 3, MEDIA_ERR_SRC_NOT_SUPPORTED: 4 })
+    let loading!: Promise<void>
+    try {
+      await act(async () => {
+        loading = usePlayerStore.getState().playTrack(second, [track, second, third])
+        // 不等待 React 提交或缓存返回，模拟紧接点击发生的旧音频事件。
+        expect(audio.src).toBe('')
+        expect(audio.paused).toBe(true)
+        audio.currentTime = 179
+        audio.duration = 999
+        audio.readyState = 4
+        audio.dispatchEvent(new Event('timeupdate'))
+        audio.dispatchEvent(new Event('durationchange'))
+        audio.error = { code: 2 }
+        audio.dispatchEvent(new Event('error'))
+        endAudio()
+      })
+      expect(usePlayerStore.getState()).toMatchObject({ currentTrack: second, currentIndex: 1,
+        currentTime: 0, duration: second.duration, isFetchingUrl: true, isPlaying: true, urlFetchError: null })
+      expect(offlineAudio.getOfflineAudio).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        resolve(result === 'blob' ? { url: 'blob:second', quality: '320k' } : null)
+        await loading
+      })
+      await ready(second.duration)
+      expect(audio.src).toBe(result === 'blob' ? 'blob:second' : '/api/audio?uid=kw-second&quality=320k')
+      expect(audio.currentTime).toBe(0)
+      expect(usePlayerStore.getState()).toMatchObject({ currentTrack: second, currentIndex: 1, isPlaying: true })
+    } finally { await act(async () => { useAuthStore.setState(auth, true) }) }
+  })
+
+  it('网络音频错误事件触发后从本地 Blob 恢复原曲目和拖动进度', async () => {
+    const auth = useAuthStore.getState()
+    await act(async () => { useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null }) })
+    vi.spyOn(offlineAudio, 'getOfflineAudio').mockResolvedValue({ url: 'blob:recovered', quality: '320k' })
+    vi.stubGlobal('URL', class extends URL { static revokeObjectURL = vi.fn() })
+    vi.stubGlobal('MediaError', { MEDIA_ERR_ABORTED: 1, MEDIA_ERR_NETWORK: 2,
+      MEDIA_ERR_DECODE: 3, MEDIA_ERR_SRC_NOT_SUPPORTED: 4 })
+    try {
+      await act(async () => { usePlayerStore.getState().seek(145) })
+      expect(usePlayerStore.getState().isPlaying).toBe(true)
+      const onError = vi.spyOn(usePlayerStore.getState(), 'handleTrackError')
+      await act(async () => {
+        audio.error = { code: 2 }
+        audio.dispatchEvent(new Event('error'))
+      })
+      expect(onError).toHaveBeenCalledWith(expect.any(String), 2, true)
+      expect(offlineAudio.getOfflineAudio).toHaveBeenCalledExactlyOnceWith('alice', track.uid, '320k', ['320k'])
+      expect(usePlayerStore.getState().streamUrl).toBe('blob:recovered')
+      await ready()
+      expect(audio.src).toBe('blob:recovered')
+      expect(audio.currentTime).toBe(145)
+      expect(audio.paused).toBe(false)
+      expect(usePlayerStore.getState()).toMatchObject({ currentTrack: track, isPlaying: true, currentTime: 145 })
+      expect(offlineAudio.getOfflineAudio).toHaveBeenCalledExactlyOnceWith('alice', track.uid, '320k', ['320k'])
+    } finally {
+      await act(async () => { useAuthStore.setState(auth, true) })
+    }
+  })
+
   it.each(['PC', '手机'])('%s 入口启用单曲循环后连续两次结束都真正重播', async device => {
     if (device === 'PC') {
       await click(container.querySelector('button[aria-label="顺序播放"]'))

@@ -1,10 +1,23 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { loadServiceWorkerSource } from '../scripts/service-worker-source.mjs'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), {
+    name: 'holly-service-worker',
+    configureServer(server) {
+      server.middlewares.use('/sw.js', (request, response, next) => {
+        if (request.method !== 'GET' && request.method !== 'HEAD') return next()
+        loadServiceWorkerSource(path.resolve(__dirname, '..')).then(source => {
+          response.setHeader('Content-Type', 'application/javascript')
+          response.setHeader('Cache-Control', 'no-cache')
+          response.end(request.method === 'HEAD' ? undefined : source)
+        }).catch(next)
+      })
+    },
+  }],
   resolve: {
     alias: {
       // 前端通过 @ 复用根目录的 components/hooks/lib（纯前端部分）

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { X } from 'lucide-react'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 interface Props {
   initialName: string
@@ -24,7 +25,7 @@ export function EditPlaylistDialog({ initialName, onClose, onSave }: Props) {
   }
 
   return (
-    <div className="safe-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <ModalMask className="safe-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClose={onClose}>
       <div className="safe-dialog w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-xl" onClick={event => event.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">编辑歌单</h2>
@@ -54,6 +55,6 @@ export function EditPlaylistDialog({ initialName, onClose, onSave }: Props) {
           </div>
         </form>
       </div>
-    </div>
+    </ModalMask>
   )
 }

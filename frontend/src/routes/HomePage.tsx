@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { useDebounce } from 'react-use'
 import { ArrowUpRight, ChevronLeft, ChevronRight, ListMusic, Music, Play, RefreshCw, Search, Trophy } from 'lucide-react'
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -58,8 +58,10 @@ function Cover({ src, icon: Icon, title }: { src: string; icon: typeof Music; ti
   )
 }
 
-export function HomePage() {
+export function HomePage({ active = true }: { active?: boolean }) {
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
+  const detailState = { discoveryFrom: location.pathname + location.search + location.hash }
   const source = getDiscoverySource(searchParams.get('source'))
   const playlistPage = getPlaylistPage(searchParams.get('page'))
   const categories = PLAYLIST_CATEGORIES[source] || []
@@ -83,6 +85,7 @@ export function HomePage() {
   useEffect(() => setKeyword(keywordParam), [keywordParam])
 
   useDebounce(() => {
+    if (!active) return
     const nextKeyword = keyword.trim()
     if (nextKeyword === keywordParam) return
     const nextParams = new URLSearchParams(searchParams)
@@ -90,7 +93,7 @@ export function HomePage() {
     else nextParams.delete('keyword')
     nextParams.set('page', '1')
     setSearchParams(nextParams, { replace: true })
-  }, 350, [keyword, keywordParam, searchParams, setSearchParams])
+  }, 350, [active, keyword, keywordParam, searchParams, setSearchParams])
 
   const updatePlaylistParams = (updates: Record<string, string | undefined>) => {
     const nextParams = new URLSearchParams(searchParams)
@@ -163,12 +166,14 @@ export function HomePage() {
 
       <div className="mb-6 flex flex-wrap gap-1 border-b border-border/50 pb-3" role="tablist" aria-label="音乐渠道">
         {CHANNELS.map(channel => (
-          <button key={channel.source} onClick={() => { setSearchParams({ source: channel.source }); setToplists([]); setPlaylists([]); setShowAllToplists(false) }} className={`rounded-full px-3 py-2 text-xs font-medium transition sm:px-4 sm:text-sm ${source === channel.source ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}`} role="tab" aria-selected={source === channel.source}>{channel.label}</button>
+          <button key={channel.source} onClick={() => { setSearchParams({ source: channel.source }); setToplists([]); setPlaylists([]); setShowAllToplists(false) }} className={`rounded-full px-3 py-2 text-xs font-medium transition sm:px-4 sm:text-sm ${source === channel.source ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}`} role="tab" aria-label={channel.label} aria-selected={source === channel.source}>
+            {channel.label.slice(0, 2)}<span className="hidden desktop:inline">{channel.label.slice(2)}</span>
+          </button>
         ))}
       </div>
 
       {featuredPlaylist && !keywordParam && (
-        <Link to={`/discover/playlists/${featuredPlaylist.id}?source=${source}`} aria-label={`打开精选歌单：${featuredPlaylist.name}`} className="feature-surface group mb-8 flex min-h-44 items-center justify-between gap-4 overflow-hidden rounded-3xl border border-border/50 p-5 transition hover:border-primary/25 sm:min-h-52 sm:gap-7 sm:p-7">
+        <Link to={`/discover/playlists/${featuredPlaylist.id}?source=${source}`} state={detailState} aria-label={`打开精选歌单：${featuredPlaylist.name}`} className="feature-surface group mb-8 flex min-h-44 items-center justify-between gap-4 overflow-hidden rounded-3xl border border-border/50 p-5 transition hover:border-primary/25 sm:min-h-52 sm:gap-7 sm:p-7">
           <div className="min-w-0 flex-1">
             <span className="mb-3 inline-flex items-center gap-1.5 text-xs font-medium tracking-wider text-primary"><span className="h-1.5 w-1.5 rounded-full bg-primary" /> 歌单精选</span>
             <h2 className="line-clamp-2 text-lg font-semibold leading-snug tracking-tight sm:text-2xl lg:text-[28px]">{featuredPlaylist.name}</h2>
@@ -192,7 +197,7 @@ export function HomePage() {
         ) : (
           <div className="grid grid-cols-1 gap-2.5 min-[480px]:grid-cols-2 2xl:grid-cols-4">
             {visibleToplists.map(item => (
-              <Link key={item.id} to={`/discover/toplists/${item.id}?source=${source}`} className="group flex min-w-0 items-center gap-3 rounded-2xl border border-border/50 bg-card/80 p-2.5 transition hover:border-primary/25 hover:bg-card hover:shadow-sm">
+              <Link key={item.id} to={`/discover/toplists/${item.id}?source=${source}`} state={detailState} className="group flex min-w-0 items-center gap-3 rounded-2xl border border-border/50 bg-card/80 p-2.5 transition hover:border-primary/25 hover:bg-card hover:shadow-sm">
                 <div className="w-12 shrink-0"><Cover src={item.cover} icon={Trophy} /></div>
                 <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold group-hover:text-primary">{item.name}</div><div className="mt-1 truncate text-xs text-muted-foreground">{item.description || '聆听此刻的热门音乐'}</div></div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60 group-hover:text-primary" />
@@ -216,7 +221,7 @@ export function HomePage() {
         ) : playlists.length === 0 ? <EmptyState icon={ListMusic} title="暂无推荐歌单" /> : (
           <div className={`-mx-2 grid grid-cols-2 gap-x-1 gap-y-4 transition-opacity sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 ${loadingPlaylists ? 'pointer-events-none opacity-50' : ''}`} aria-busy={loadingPlaylists}>
             {playlists.map(item => (
-              <Link key={item.id} to={`/discover/playlists/${item.id}?source=${source}`} className="album-tile group min-w-0 rounded-2xl p-2">
+              <Link key={item.id} to={`/discover/playlists/${item.id}?source=${source}`} state={detailState} className="album-tile group min-w-0 rounded-2xl p-2">
                 <div className="cover-elevation relative rounded-xl"><Cover src={item.cover} icon={ListMusic} />{item.playCount > 0 && <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[10px] text-white"><Play className="h-2.5 w-2.5 fill-current" />{formatPlayCount(item.playCount)}</span>}</div>
                 <div className="mt-3 line-clamp-2 text-sm font-medium leading-relaxed group-hover:text-primary">{item.name}</div>
                 <div className="mt-1 truncate text-xs text-muted-foreground">{item.author}{item.songCount && item.songCount > 0 ? ` · ${item.songCount} 首` : ''}</div>

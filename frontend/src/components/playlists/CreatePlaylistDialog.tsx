@@ -1,6 +1,7 @@
 
 import { useState } from 'react'
 import { X } from 'lucide-react'
+import { ModalMask } from '@/components/shared/ModalMask'
 
 interface Props {
   onClose: () => void
@@ -23,7 +24,7 @@ export function CreatePlaylistDialog({ onClose, onCreate }: Props) {
   }
 
   return (
-    <div className="safe-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <ModalMask className="safe-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClose={onClose}>
       <div
         className="safe-dialog w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-xl"
         onClick={e => e.stopPropagation()}
@@ -60,6 +61,6 @@ export function CreatePlaylistDialog({ onClose, onCreate }: Props) {
           </div>
         </form>
       </div>
-    </div>
+    </ModalMask>
   )
 }

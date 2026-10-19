@@ -14,13 +14,13 @@ export function formatTime(seconds: number): string {
 }
 
 /** 字节数 → 可读大小 */
-export function formatSize(bytes: number | string): string {
+export function formatSize(bytes: number | string, base: 1000 | 1024 = 1024): string {
   const n = typeof bytes === 'string' ? parseFloat(bytes) : bytes
   if (!n || isNaN(n)) return '0 B'
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+  if (n < base) return `${n} B`
+  if (n < base * base) return `${(n / base).toFixed(1)} KB`
+  if (n < base * base * base) return `${(n / base / base).toFixed(1)} MB`
+  return `${(n / base / base / base).toFixed(2)} GB`
 }
 
 /** ISO 时间 → 相对时间简短显示 */

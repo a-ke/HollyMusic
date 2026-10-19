@@ -1,5 +1,6 @@
 
 import { usePlayerStore } from '@/lib/store/player-store'
+import { useLyricsPanel } from '@/hooks/useLyricsPanel'
 import { useFavoritesStore } from '@/lib/store/favorites-store'
 import { CoverImage } from '@/components/shared/CoverImage'
 import { Heart, Music2, Share2 } from 'lucide-react'
@@ -10,7 +11,7 @@ import { toast } from '@/lib/toast'
 export function NowPlaying() {
   const track = usePlayerStore(s => s.currentTrack)
   const effectiveQuality = usePlayerStore(s => s.effectiveQuality)
-  const toggleLyrics = usePlayerStore(s => s.toggleLyrics)
+  const { toggle: toggleLyrics } = useLyricsPanel()
   const isFav = useFavoritesStore(s => (track ? s.ids.has(track.uid) : false))
   const toggle = useFavoritesStore(s => s.toggle)
 

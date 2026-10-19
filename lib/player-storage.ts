@@ -22,7 +22,6 @@ export interface PlaybackSession {
 export interface PlayerTabState {
   sleepTimer: { minutes: number; expiresAt: number } | null
   isQueueOpen: boolean
-  isLyricsOpen: boolean
 }
 
 export const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
@@ -61,7 +60,7 @@ export function loadPlayerPreferences(): PlayerPreferences {
 }
 
 /** 重新构造已知字段，避免旧版本或损坏数据进入播放器；保留音源必需的元数据。 */
-function parseTrack(value: unknown): Track | null {
+export function parseTrack(value: unknown): Track | null {
   if (!isRecord(value) || typeof value.uid !== 'string' || !value.uid || !isRecord(value.musicInfo)) return null
   const info = value.musicInfo
   if (typeof info.source !== 'string' || !SOURCES.includes(info.source as SourceType)
@@ -91,6 +90,10 @@ function parseTrack(value: unknown): Track | null {
   }
   if (typeof info.songId === 'string' || (typeof info.songId === 'number' && Number.isFinite(info.songId))) musicInfo.songId = info.songId
   const track = toTrack({ uid: value.uid, musicInfo })
+  if (value.playback !== undefined) {
+    if (!isRecord(value.playback) || value.playback.source !== 'local' || !isQuality(value.playback.quality)) return null
+    track.playback = { source: 'local', quality: value.playback.quality }
+  }
   track.duration = typeof value.duration === 'number' && Number.isFinite(value.duration) && value.duration >= 0
     ? value.duration : Number.isFinite(track.duration) && track.duration > 0 ? track.duration : 0
   return track
@@ -107,7 +110,9 @@ function parseSession(value: unknown): PlaybackSession | null {
   const currentIndex = typeof value.currentIndex === 'number' && Number.isInteger(value.currentIndex)
     && value.currentIndex >= -1 && value.currentIndex < queue.length ? value.currentIndex : -1
   const isCurrentTempPlay = value.isCurrentTempPlay === true
-  if (currentTrack && !isCurrentTempPlay && queue[currentIndex]?.uid !== currentTrack.uid) return null
+  if (currentTrack && !isCurrentTempPlay && (queue[currentIndex]?.uid !== currentTrack.uid
+    || queue[currentIndex]?.playback?.source !== currentTrack.playback?.source
+    || queue[currentIndex]?.playback?.quality !== currentTrack.playback?.quality)) return null
   const currentTime = currentTrack && typeof value.currentTime === 'number' && Number.isFinite(value.currentTime)
     ? Math.max(0, value.currentTime) : 0
   return {
@@ -123,7 +128,7 @@ function parseTabState(value: unknown): PlayerTabState | null {
     && typeof timer.expiresAt === 'number' && Number.isFinite(timer.expiresAt)
     && timer.expiresAt > Date.now() && timer.expiresAt <= Date.now() + 60 * 60_000
     ? { minutes: timer.minutes, expiresAt: timer.expiresAt } : null
-  return { sleepTimer, isQueueOpen: value.isQueueOpen === true, isLyricsOpen: value.isLyricsOpen === true }
+  return { sleepTimer, isQueueOpen: value.isQueueOpen === true }
 }
 
 export function playbackSessionStorage(username: string, area: StorageArea = 'local') {

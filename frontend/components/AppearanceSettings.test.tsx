@@ -113,12 +113,20 @@ describe('首屏主题恢复', () => {
   it.each(savedSettings)('首屏脚本与 React 状态对 %s 的恢复一致', raw => {
     for (const systemDark of [true, false]) {
       const doc = document.implementation.createHTMLDocument()
+      const themeMeta = doc.createElement('meta')
+      themeMeta.name = 'theme-color'
+      themeMeta.content = '#1DB954'
+      doc.head.appendChild(themeMeta)
       const execute = new Function('document', 'localStorage', 'matchMedia', bootstrap)
       execute(doc, { getItem: () => raw }, () => ({ matches: systemDark }))
       const expected = parseAppearance(raw)
       const dark = expected.mode === 'dark' || (expected.mode === 'system' && systemDark)
       expect(doc.documentElement.dataset.theme).toBe(dark ? 'dark' : 'light')
       expect(doc.documentElement.dataset.palette).toBe(expected.palette)
+      const chrome = dark
+        ? { forest: '#19251f', blue: '#1b242e', apricot: '#2c231c' }
+        : { forest: '#f3f7f3', blue: '#f2f6fa', apricot: '#faf5ef' }
+      expect(themeMeta.content).toBe(chrome[expected.palette])
     }
   })
 

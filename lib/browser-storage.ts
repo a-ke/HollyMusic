@@ -1,6 +1,11 @@
 /** 浏览器存储边界：业务负责校验与迁移，存储失败不阻断当前会话。 */
 export type StorageArea = 'local' | 'session'
 
+/** Cache Storage 与播放响应复用共用安全上下文检测，兼容 HTTPS 和本机开发地址。 */
+export function isCacheStorageAvailable(): boolean {
+  return typeof window !== 'undefined' && window.isSecureContext && 'caches' in window
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }

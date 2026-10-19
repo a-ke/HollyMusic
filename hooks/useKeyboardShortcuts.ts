@@ -16,6 +16,7 @@
 
 import { useEffect } from 'react'
 import { usePlayerStore } from '@/lib/store/player-store'
+import { useLyricsPanel } from '@/hooks/useLyricsPanel'
 
 const VOLUME_STEP = 0.1
 const SEEK_STEP = 10
@@ -26,6 +27,7 @@ function isTypingTarget(t: EventTarget | null): boolean {
 }
 
 export function useKeyboardShortcuts() {
+  const { toggle: toggleLyrics } = useLyricsPanel()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return
@@ -61,11 +63,11 @@ export function useKeyboardShortcuts() {
       switch (e.key.toLowerCase()) {
         case 'm': st.toggleMute(); return
         case 'r': st.cyclePlaybackMode(); return
-        case 'l': st.toggleLyrics(); return
+        case 'l': toggleLyrics(); return
         case 'q': st.toggleQueue(); return
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [toggleLyrics])
 }

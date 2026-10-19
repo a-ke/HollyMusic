@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, Music, Play, RefreshCw } from 'lucide-react'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { LoadingSkeleton } from '@/components/shared/LoadingSkeleton'
@@ -13,32 +13,46 @@ import type { DiscoveryCollectionDetail, DiscoverySource } from '@/lib/services/
 export function DiscoveryCollectionPage({ kind }: { kind: 'toplists' | 'playlists' }) {
   const { id = '' } = useParams<{ id: string }>()
   const [searchParams] = useSearchParams()
+  const location = useLocation()
   const sourceParam = searchParams.get('source')
   const source: DiscoverySource = sourceParam === 'wy' || sourceParam === 'kw' || sourceParam === 'kg' || sourceParam === 'mg' ? sourceParam : 'tx'
+  // 详情页可能来自首页搜索、筛选或翻页；返回时必须保留完整查询条件。
+  const discoveryFrom: unknown = location.state?.discoveryFrom
+  const backTo = typeof discoveryFrom === 'string' && /^\/(?:[?#]|$)/.test(discoveryFrom)
+    ? discoveryFrom : `/?source=${source}`
   const [detail, setDetail] = useState<DiscoveryCollectionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const playTrack = usePlayerStore(s => s.playTrack)
+  const requestId = useRef(0)
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const currentRequest = ++requestId.current
     setLoading(true)
     setError(null)
     try {
       const result = kind === 'toplists' ? await getToplistDetail(source, id) : await getRecommendedPlaylistDetail(source, id)
-      setDetail(result)
+      if (currentRequest !== requestId.current) return
+      // 大歌单的列表更新允许被歌词开关等即时交互打断。
+      startTransition(() => {
+        setDetail(result)
+        setLoading(false)
+      })
     } catch (err) {
+      if (currentRequest !== requestId.current) return
       setDetail(null)
       setError(err instanceof Error ? err.message : '加载失败')
-    } finally {
       setLoading(false)
     }
-  }
+  }, [id, kind, source])
 
   useEffect(() => {
-    void load()
-    // id / kind 变化时重新请求；load 是本组件内函数，无需作为依赖项。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, kind, source])
+    const activeRequest = requestId
+    let cancelled = false
+    // StrictMode 重建时取消首轮尚未发出的请求，避免重复下载整张歌单。
+    void Promise.resolve().then(() => { if (!cancelled) return load() })
+    return () => { cancelled = true; activeRequest.current++ }
+  }, [load])
 
   const tracks = useMemo(() => (detail?.tracks ?? []).map(song => toTrack({ uid: song.uid, musicInfo: song })), [detail])
 
@@ -47,7 +61,7 @@ export function DiscoveryCollectionPage({ kind }: { kind: 'toplists' | 'playlist
 
   return (
     <div className="page-shell">
-      <Link to={`/?source=${source}`} className="mb-5 inline-flex min-h-8 items-center gap-1 text-xs text-muted-foreground hover:text-primary"><ChevronLeft className="h-4 w-4" /> 发现音乐</Link>
+      <Link to={backTo} className="mb-5 inline-flex min-h-8 items-center gap-1 text-xs text-muted-foreground hover:text-primary"><ChevronLeft className="h-4 w-4" /> 发现音乐</Link>
       <div className="feature-surface mb-7 flex items-start gap-3 rounded-3xl border border-border/50 p-4 sm:items-center sm:gap-6 sm:p-7">
         {detail.cover ? (
           <RemoteCoverImage src={detail.cover} alt="" className="cover-elevation h-20 w-20 shrink-0 rounded-2xl object-cover sm:h-40 sm:w-40 lg:h-44 lg:w-44" />

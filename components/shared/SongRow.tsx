@@ -8,23 +8,26 @@ import { useLongPress } from '@/hooks/useLongPress'
 import { CoverImage } from './CoverImage'
 import { SourceBadge } from './SourceBadge'
 import { QualityBadge } from './QualityBadge'
-import { Play, Pause, Heart, MoreHorizontal, Download, Loader2 } from 'lucide-react'
+import { Play, Pause, Heart, MoreHorizontal, Download, Loader2, Trash2 } from 'lucide-react'
 import { formatTime } from '@/lib/utils/format'
-import { resolveQuality } from '@/lib/quality-options'
+import { resolveQuality, QUALITY_LABEL } from '@/lib/quality-options'
 import { toast } from '@/lib/toast'
 import type { PlaylistMenuEntry } from '@/lib/store/context-menu-store'
 import type { Track } from '@/lib/types/player'
+import type { QualityType } from '@/lib/types/music'
 
 interface SongRowProps {
   track: Track
   queue?: Track[]
   index?: number
   playlistEntry?: PlaylistMenuEntry
+  localPlayback?: { quality: QualityType; onRemove: () => void }
 }
 
-export function SongRow({ track, queue, index, playlistEntry }: SongRowProps) {
+export function SongRow({ track, queue, index, playlistEntry, localPlayback }: SongRowProps) {
   const currentTrack = usePlayerStore(s => s.currentTrack)
   const isPlaying = usePlayerStore(s => s.isPlaying)
+  const effectiveQuality = usePlayerStore(s => s.effectiveQuality)
   const playTrack = usePlayerStore(s => s.playTrack)
   const isFav = useFavoritesStore(s => s.ids.has(track.uid))
   const toggleFav = useFavoritesStore(s => s.toggle)
@@ -32,17 +35,18 @@ export function SongRow({ track, queue, index, playlistEntry }: SongRowProps) {
   const authenticated = useAuthStore(s => s.authenticated)
   const { download, downloading, error } = useDownload()
 
-  const isCurrent = currentTrack?.uid === track.uid
+  const isCurrent = currentTrack?.uid === track.uid && (!localPlayback || effectiveQuality === localPlayback.quality)
   const isCurrentPlaying = isCurrent && isPlaying
 
   // 触屏长按呼出操作菜单（Spotify/网易云同款），桌面走右键/hover"⋯"
-  const longPress = useLongPress((x, y) => openMenu(track, x, y, playlistEntry))
+  const longPress = useLongPress((x, y) => { if (!localPlayback) openMenu(track, x, y, playlistEntry) })
 
   const handlePlay = () => {
-    if (isCurrent) {
+    const state = usePlayerStore.getState()
+    if (isCurrent && (!localPlayback || (state.streamUrl?.startsWith('blob:') && state.effectiveQuality === localPlayback.quality))) {
       usePlayerStore.getState().togglePlay()
     } else {
-      playTrack(track, queue)
+      void playTrack(track, queue, localPlayback ? { offline: true, quality: localPlayback.quality } : undefined)
     }
   }
 
@@ -50,7 +54,7 @@ export function SongRow({ track, queue, index, playlistEntry }: SongRowProps) {
     <div
       onContextMenu={e => {
         e.preventDefault()
-        openMenu(track, e.clientX, e.clientY, playlistEntry)
+        if (!localPlayback) openMenu(track, e.clientX, e.clientY, playlistEntry)
       }}
       {...longPress}
       // 触屏禁用长按文本选择/iOS 放大镜（桌面不受影响）
@@ -84,7 +88,7 @@ export function SongRow({ track, queue, index, playlistEntry }: SongRowProps) {
       <button onClick={handlePlay} className="min-w-0 flex-1 text-left">
         <div className={`flex items-center gap-2 ${isCurrent ? 'text-primary' : ''}`}>
           <span className="truncate text-sm font-medium">{track.name}</span>
-          <QualityBadge musicInfo={track.musicInfo} />
+          {localPlayback ? <span className="shrink-0 text-[10px] text-muted-foreground">{QUALITY_LABEL[localPlayback.quality]}</span> : <QualityBadge musicInfo={track.musicInfo} />}
         </div>
         <div className="mt-0.5 flex items-center gap-2">
           <span className="truncate text-xs text-muted-foreground">{track.artist}</span>
@@ -96,7 +100,7 @@ export function SongRow({ track, queue, index, playlistEntry }: SongRowProps) {
         {track.album}
       </span>
 
-      <button
+      {!localPlayback && <button
         onClick={() =>
           toggleFav(track.uid).catch(() =>
             toast.error(isFav ? '取消收藏失败，请重试' : '收藏失败，请重试')
@@ -111,9 +115,9 @@ export function SongRow({ track, queue, index, playlistEntry }: SongRowProps) {
         aria-label="收藏"
       >
         <Heart className={`h-4 w-4 ${isFav ? 'fill-current' : ''}`} />
-      </button>
+      </button>}
 
-      {authenticated && (
+      {!localPlayback && authenticated && (
         <button
           onClick={() =>
             download({
@@ -138,7 +142,12 @@ export function SongRow({ track, queue, index, playlistEntry }: SongRowProps) {
         </button>
       )}
 
-      <button
+      {localPlayback ? <button
+        onClick={localPlayback.onRemove}
+        className="shrink-0 p-1 text-muted-foreground opacity-70 hover:text-destructive focus-visible:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-coarse:p-3 pointer-coarse:-m-1.5"
+        aria-label={`删除 ${track.name} 的本地缓存`}
+        title="删除本地缓存"
+      ><Trash2 className="h-4 w-4" /></button> : <button
         onClick={e => {
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
           openMenu(track, rect.right, rect.bottom, playlistEntry)
@@ -150,7 +159,7 @@ export function SongRow({ track, queue, index, playlistEntry }: SongRowProps) {
         title="更多操作"
       >
         <MoreHorizontal className="h-4 w-4" />
-      </button>
+      </button>}
 
       <span className="hidden w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground min-[360px]:block sm:w-12">
         {formatTime(track.duration)}
