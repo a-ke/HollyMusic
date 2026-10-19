@@ -50,6 +50,7 @@ interface AuthStore {
   username: string | null
   /** 是否需要强制修改密码（首次登录/管理员重置后为 true） */
   mustChangePassword: boolean
+  /** 是否有有效的 init 会话校验；表单提交状态由页面单独管理。 */
   loading: boolean
   setupRequired: boolean | null
   setupRecoveryRequired: boolean
@@ -111,6 +112,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   setup: async (password, confirmation, token) => {
     ++authRequestId
+    // 旧 init 已失效，同步结束它的 loading，避免依赖不会再写回状态的旧响应。
+    set({ loading: false })
     try {
       await apiSetup(password, confirmation, token)
       offlineIdentity.write('admin')
@@ -126,6 +129,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   login: async (username, password) => {
     ++authRequestId
+    set({ loading: false })
     const res = await apiLogin(username, password)
     const previous = get()
     if (!previous.authenticated || previous.username !== res.username || res.mustChangePassword) cancelOfflineDownloads()
@@ -137,6 +141,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   logout: async () => {
     ++authRequestId
+    set({ loading: false })
     stopHeartbeat()
     await apiLogout()
     offlineIdentity.remove()
