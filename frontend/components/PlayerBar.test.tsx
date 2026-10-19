@@ -100,6 +100,42 @@ afterEach(async () => {
 })
 
 describe('PC 与移动端共用播放器', () => {
+  it.each([
+    { entry: '恢复播放', resume: false },
+    { entry: '恢复播放', resume: true },
+    { entry: '首次选歌', resume: false },
+  ])('$entry 等待缓存时可通过按钮暂停，再次继续=$resume 时复用同一查询', async ({ entry, resume }) => {
+    const auth = useAuthStore.getState()
+    let resolve!: (value: { url: string; quality: '320k' }) => void
+    const pending = new Promise<{ url: string; quality: '320k' }>(done => { resolve = done })
+    const readCache = vi.spyOn(offlineAudio, 'getOfflineAudio').mockReturnValue(pending)
+    vi.stubGlobal('URL', class extends URL { static revokeObjectURL = vi.fn() })
+    try {
+      await act(async () => {
+        useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null, loading: false })
+        usePlayerStore.getState().restorePlayback({ queue: [track], playNextQueue: [], currentIndex: 0,
+          currentTrack: track, currentTime: 42, isCurrentTempPlay: false })
+      })
+      if (entry === '恢复播放') await click(container.querySelector('button[aria-label="播放"]'))
+      else await act(async () => { void usePlayerStore.getState().playTrack(second, [second]) })
+      expect(usePlayerStore.getState()).toMatchObject({ isFetchingUrl: true, isPlaying: true })
+      await click(container.querySelector('button[aria-label="暂停"]'))
+      expect(usePlayerStore.getState().isPlaying).toBe(false)
+      if (resume) await click(container.querySelector('button[aria-label="播放"]'))
+      expect(readCache).toHaveBeenCalledOnce()
+      await act(async () => {
+        resolve({ url: 'blob:pending-playback', quality: '320k' })
+        await pending
+      })
+      await ready()
+      expect(audio.src).toBe('blob:pending-playback')
+      expect(audio.paused).toBe(!resume)
+      expect(usePlayerStore.getState()).toMatchObject({ isFetchingUrl: false, isPlaying: resume,
+        currentTime: entry === '恢复播放' ? 42 : 0 })
+      expect(readCache).toHaveBeenCalledOnce()
+    } finally { await act(async () => { useAuthStore.setState(auth, true) }) }
+  })
+
   it.each(['pause-and-seek', 'switch-track'])('等待 SW 登记期间仍尊重用户的 %s 操作', async action => {
     const auth = useAuthStore.getState()
     let resolve!: (ready: boolean) => void

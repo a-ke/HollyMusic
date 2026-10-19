@@ -186,7 +186,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     const requestId = ++streamRequestId
     const commandId = playbackCommandId
     const seekNonce = get().seekNonce
-    set({ isFetchingUrl: true, bufferProgress: null })
+    // 等待缓存时也立即记录播放意图，让按钮/媒体会话可以暂停；完成后仍以最新用户指令为准。
+    set({ isFetchingUrl: true, isPlaying: options?.autoplay ?? true, bufferProgress: null })
     // 前端按歌曲支持范围就近降级，URL 带准确音质 → 缓存键准确、UI 如实显示。
     // 服务端 getMusicUrl 仍保留降级作音源级兜底。
     // forceQuality：解码失败降级重试时强制指定（绕过用户偏好），见 handleTrackError。
@@ -249,8 +250,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   // 导致连续失败上限永远达不到 → 无限循环跳歌。改由 setCurrentTime 在播放稳定(>5s)时重置。
   setIsPlaying: (v, options) => {
     if (!options?.fromAudio) playbackCommandId++
-    const { currentTrack, streamUrl, currentTime } = get()
-    if (v && currentTrack && !streamUrl) {
+    const { currentTrack, streamUrl, currentTime, isFetchingUrl } = get()
+    if (v && currentTrack && !streamUrl && !isFetchingUrl) {
       void get().loadStreamUrl(currentTrack, undefined, { startTime: currentTime })
     } else set({ isPlaying: v && currentTrack !== null })
   },
