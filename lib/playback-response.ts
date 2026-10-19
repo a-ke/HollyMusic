@@ -1,6 +1,7 @@
 import { isCacheStorageAvailable } from '@/lib/browser-storage'
 import { getOfflineAudioCacheName, getOfflineAudioCacheKey } from '@/lib/offline-audio-keys'
 import { VALID_QUALITIES } from '@/lib/quality-options'
+import { logger } from '@/lib/logger'
 import type { QualityType } from '@/lib/types/music'
 
 /** 播放响应通过专属 MessagePort 返回，不在不同页面或账号间广播音频。 */
@@ -15,21 +16,21 @@ const captures = new Map<string, PlaybackResponseCapture>()
 const keyFor = (username: string, url: string) => `${username}:${url}`
 
 /** 完整下载通知只携带分块清单，按需逐块读取，避免把整首音频带回页面内存。 */
-async function readStagedAudio(cacheKey: string, captureId: string, limit: number): Promise<Response | null> {
+async function readStagedAudio(cacheKey: string, captureId: string, limit: number, reportFailure: (error: unknown) => void): Promise<Response | null> {
   const cache = await caches.open('holly-playback-data-v1')
   const response = await cache.match(cacheKey)
   if (!response) return null
   const manifest = await response.json() as { version: number; size: number; headers: Record<string, string>; chunks: Array<{ key: string; length: number }> }
   if (manifest.version !== 1 || !Number.isSafeInteger(manifest.size) || manifest.size <= 0 || manifest.size > limit
-    || !Array.isArray(manifest.chunks) || manifest.headers?.['content-length'] !== String(manifest.size)) return null
+    || !Array.isArray(manifest.chunks) || manifest.headers?.['content-length'] !== String(manifest.size)) throw new Error('播放缓存清单格式或大小无效')
   const base = cacheKey.slice(0, -'complete'.length)
   let total = 0
   for (const [index, chunk] of manifest.chunks.entries()) {
     if (chunk.key !== `${base}${index}` || !base.endsWith(`/${captureId}/`)
-      || !Number.isSafeInteger(chunk.length) || chunk.length <= 0 || chunk.length > 256 * 1024) return null
+      || !Number.isSafeInteger(chunk.length) || chunk.length <= 0 || chunk.length > 256 * 1024) throw new Error('播放缓存分块清单无效')
     total += chunk.length
   }
-  if (total !== manifest.size) return null
+  if (total !== manifest.size) throw new Error('播放缓存清单总长度不一致')
   let index = 0
   let cancelled = false
   return new Response(new ReadableStream<Uint8Array>({
@@ -43,7 +44,9 @@ async function readStagedAudio(cacheKey: string, captureId: string, limit: numbe
         if (cancelled) return
         if (bytes.byteLength !== chunk.length) throw new Error('缓存分块不完整')
         controller.enqueue(bytes)
-      } catch (error) { if (!cancelled) controller.error(error) }
+      } catch (error) {
+        if (!cancelled) { reportFailure(error); controller.error(error) }
+      }
     },
     cancel() { cancelled = true },
   }), { headers: manifest.headers })
@@ -77,6 +80,15 @@ export function preparePlaybackResponse(username: string, url: string, limit: nu
   let resolveReady!: (ready: boolean) => void
   let resolveAvailable!: () => void
   let stored = false
+  let readFailureReported = false
+  const reportReadFailure = (error: unknown) => {
+    if (readFailureReported) return
+    readFailureReported = true
+    logger.warn('[playback] 读取共享音频缓存失败', {
+      name: error instanceof Error ? error.name : 'Error',
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
   let source: { cacheName: string; cacheKey: string } | { response: Response } | null = null
   const ready = new Promise<boolean>(resolve => { resolveReady = resolve })
   const available = new Promise<void>(resolve => { resolveAvailable = resolve })
@@ -91,9 +103,12 @@ export function preparePlaybackResponse(username: string, url: string, limit: nu
       return available.then(async () => {
         if (!source) return null
         if ('response' in source) return source.response.clone()
-        if (source.cacheName === 'holly-playback-data-v1') return readStagedAudio(source.cacheKey, captureId, limit)
+        if (source.cacheName === 'holly-playback-data-v1') return readStagedAudio(source.cacheKey, captureId, limit, reportReadFailure)
         return (await caches.open(source.cacheName)).match(source.cacheKey).then(value => value ?? null)
-      }).catch(() => null)
+      }).catch(error => {
+        reportReadFailure(error)
+        return null
+      })
     },
     cached: () => {
       stored = true

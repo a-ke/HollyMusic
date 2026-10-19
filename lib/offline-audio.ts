@@ -78,6 +78,10 @@ export async function setOfflineCacheLimit(username: string, limit: number, appr
 
 export { isOfflineStorageAvailable }
 function changed(): void { window.dispatchEvent(new Event(OFFLINE_CHANGED)) }
+function logOfflineFailure(message: string, error: unknown): void {
+  logger.warn(message, { name: error instanceof Error ? error.name : 'Error',
+    message: error instanceof Error ? error.message : String(error) })
+}
 async function withCacheLock<T>(action: () => Promise<T>): Promise<T> {
   return navigator.locks ? navigator.locks.request('holly-offline-audio', action) : action()
 }
@@ -248,10 +252,11 @@ export function cachePlayedTrack(username: string, track: Track, quality: Qualit
         }
       })
     } catch (error) {
-      if (!controller.signal.aborted) logger.warn('[offline] 歌曲缓存失败，不影响在线播放', error)
+      if (!controller.signal.aborted) logOfflineFailure('[offline] 歌曲缓存失败，不影响在线播放', error)
     } finally {
       controller.abort()
-      if (staging && stagingKey) await staging.delete(stagingKey).catch(() => {})
+      if (staging && stagingKey) await staging.delete(stagingKey)
+        .catch(error => logOfflineFailure('[offline] 清理临时音频失败', error))
       clearTimeout(timeout)
       controllers.delete(controller)
       if (queued.get(job) === epoch) queued.delete(job)
@@ -275,7 +280,7 @@ export async function getOfflineAudio(username: string, uid: string, quality: Qu
   headers.set('x-holly-used', String(Date.now()))
   await withCacheLock(async () => {
     if (await cache.match(entry.key)) await cache.put(entry.key, new Response(blob, { headers }))
-  }).catch(() => {})
+  }).catch(error => logOfflineFailure('[offline] 更新歌曲使用时间失败，不影响本地播放', error))
   return { url: URL.createObjectURL(blob), quality: entry.quality }
 }
 

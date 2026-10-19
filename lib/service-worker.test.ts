@@ -7,11 +7,13 @@ function worker(development = false, storage?: ReturnType<typeof memoryCaches>) 
   const cache = { addAll: vi.fn(async () => {}), match: vi.fn(async () => new Response('offline shell')) }
   const chunks = memoryCaches()
   const caches = storage ?? { open: vi.fn(async (name: string) => name === 'holly-playback-data-v1' ? chunks.open(name) : cache), keys: vi.fn(async () => [
-    'holly-shell-shell-dev', 'holly-shell-old', 'holly-static-v3', 'holly-pages-v3', 'holly-audio-v1:alice', 'other-app',
+    'holly-shell-0123456789abcdef', 'holly-shell-old', 'holly-static-v3', 'holly-pages-v3', 'holly-audio-v1:alice', 'other-app',
   ]), delete: vi.fn(async () => true) }
   const fetch = vi.fn(async () => { throw new TypeError('offline') })
+  const diagnostics = vi.fn()
   const self = { addEventListener: (name: string, handler: (event: unknown) => void) => { handlers[name] = handler },
-    clients: { claim: vi.fn() }, skipWaiting: vi.fn(async () => {}),
+    __HOLLY_SW_BUILD__: { version: '0123456789abcdef', precache: ['/', '/theme-init.js'] },
+    clients: { claim: vi.fn(), get: vi.fn(async () => ({ postMessage: diagnostics })) }, skipWaiting: vi.fn(async () => {}),
     location: { origin: 'https://holly.test', href: `https://holly.test/sw.js${development ? '?mode=development' : ''}` } }
   class WorkerRequest extends Request {
     constructor(input: string | Request, init?: RequestInit) {
@@ -27,7 +29,7 @@ function worker(development = false, storage?: ReturnType<typeof memoryCaches>) 
     chunkCount: entry.chunks.length, resident: entry.chunks.reduce((sum, chunk) => sum + (chunk.data?.byteLength || 0), 0),
     persisted: !!entry.persisted, bodies: entry.bodies.size
   })) })`, context) as { bytes: number; writeBytes: number; entries: Array<{ chunkCount: number; resident: number; persisted: boolean; bodies: number }> }
-  return { handlers, cache, caches, fetch, self, inspect }
+  return { handlers, cache, caches, fetch, self, inspect, diagnostics }
 }
 
 it('必需资源预缓存失败会阻止安装，不激活残缺应用壳', async () => {
@@ -461,7 +463,35 @@ it('临时分块存储不可用时保持内存预算，已淘汰的区间回退�
   expect(current.inspect().bytes).toBeLessThanOrEqual(8 * 1024 * 1024)
   expect(await (await requestAudio(current.handlers, 'bytes=0-3').response).text()).toBe('aaaa')
   expect(port.postMessage).toHaveBeenCalledWith({ type: 'unavailable' })
+  expect(current.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ operation: 'write-chunk', message: 'QuotaExceededError' }))
+  expect(current.diagnostics).toHaveBeenCalledWith(expect.objectContaining({ operation: 'read-chunk', message: 'storage unavailable' }))
   port.onmessage!({ data: { type: 'cancel' } })
+})
+
+it.each([false, true])('SW 存储错误限频，诊断通道失效=%s 也不影响网络回退', async disconnected => {
+  const storage = memoryCaches()
+  storage.open.mockRejectedValue(new DOMException('disk full', 'QuotaExceededError'))
+  const current = worker(false, storage)
+  if (disconnected) current.self.clients.get.mockRejectedValue(new Error('page closed'))
+  current.fetch.mockImplementation(async () => new Response('network'))
+  for (let attempt = 0; attempt < 3; attempt++) {
+    expect(await (await requestAudio(current.handlers, 'bytes=0-').response).text()).toBe('network')
+  }
+  if (disconnected) expect(current.diagnostics).not.toHaveBeenCalled()
+  else expect(current.diagnostics).toHaveBeenCalledExactlyOnceWith({ type: 'holly-sw-diagnostic',
+    operation: 'restore-audio', name: 'QuotaExceededError', message: 'disk full' })
+  expect(current.self.clients.get).toHaveBeenCalledWith('alice-tab')
+})
+
+it('正常未命中与用户取消不产生存储错误诊断', async () => {
+  const current = worker(false, memoryCaches())
+  current.fetch.mockImplementation(async () => new Response('network'))
+  await (await requestAudio(current.handlers, 'bytes=0-').response).text()
+  const port = registerAudio(current.handlers)
+  port.onmessage!({ data: { type: 'cancel-cache' } })
+  port.onmessage!({ data: { type: 'cancel' } })
+  await Promise.resolve()
+  expect(current.diagnostics).not.toHaveBeenCalled()
 })
 
 it('落盘后取消缓存写入仍可离线拖动，SW 重启后也保留登记，显式释放才清除', async () => {

@@ -14,6 +14,15 @@ export function ServiceWorkerRegister() {
     if (!isCacheStorageAvailable()) return
     if (!('serviceWorker' in navigator)) return
 
+    const serviceWorker = navigator.serviceWorker
+    const onDiagnostic = (event: MessageEvent) => {
+      const data = event.data
+      if (!event.source || event.source !== serviceWorker.controller || data?.type !== 'holly-sw-diagnostic'
+        || typeof data.operation !== 'string' || typeof data.name !== 'string' || typeof data.message !== 'string') return
+      logger.warn(`[SW] ${data.operation.slice(0, 80)}`, { name: data.name.slice(0, 80), message: data.message.slice(0, 500) })
+    }
+    serviceWorker.addEventListener('message', onDiagnostic)
+
     const register = () => {
       navigator.serviceWorker
         .register(process.env.NODE_ENV === 'development' ? '/sw.js?mode=development' : '/sw.js', { scope: '/' })
@@ -27,7 +36,10 @@ export function ServiceWorkerRegister() {
       register()
     } else {
       window.addEventListener('load', register)
-      return () => window.removeEventListener('load', register)
+    }
+    return () => {
+      window.removeEventListener('load', register)
+      serviceWorker.removeEventListener('message', onDiagnostic)
     }
   }, [])
 

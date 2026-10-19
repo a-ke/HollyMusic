@@ -1,9 +1,14 @@
 /** 构建时注入内容版本和完整资源清单。歌曲元数据及持久缓存仍由前端管理。 */
-const VERSION = 'shell-dev'
-const PRECACHE = ['/', '/manifest.json', '/icon.svg', '/theme-init.js', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png']
+const DEVELOPMENT = new URL(self.location.href).searchParams.get('mode') === 'development'
+const BUILD = self.__HOLLY_SW_BUILD__
+if (!DEVELOPMENT && (!BUILD || !/^[a-f0-9]{16}$/.test(BUILD.version)
+  || !Array.isArray(BUILD.precache) || !BUILD.precache.includes('/'))) {
+  throw new Error('SW 缺少有效构建配置，请运行 pnpm -C frontend build')
+}
+const VERSION = BUILD?.version ?? 'shell-dev'
+const PRECACHE = BUILD?.precache ?? []
 const SHELL_CACHE = `holly-shell-${VERSION}`
 const ASSETS = new Set(PRECACHE)
-const DEVELOPMENT = new URL(self.location.href).searchParams.get('mode') === 'development'
 const PLAYBACK_SESSIONS = 'holly-playback-sessions-v1'
 const AUDIO_STALL_MS = 60_000
 const AUDIO_DATA_CACHE = 'holly-playback-data-v1'
@@ -14,6 +19,19 @@ const AUDIO_WRITE_MS = 5_000
 const hotChunks = new Map()
 let audioMemoryBytes = 0
 let audioWriteBytes = 0
+
+const diagnosticTimes = new Map()
+async function reportAudioDiagnostic(operation, error, clientId) {
+  if (error?.name === 'AbortError') return
+  const now = Date.now()
+  if (now - (diagnosticTimes.get(operation) ?? -Infinity) < 30_000) return
+  diagnosticTimes.set(operation, now)
+  try {
+    const clients = clientId ? [await self.clients.get(clientId)] : await self.clients.matchAll({ type: 'window' })
+    for (const client of clients) client?.postMessage({ type: 'holly-sw-diagnostic', operation,
+      name: String(error?.name || 'Error').slice(0, 80), message: String(error?.message || error).slice(0, 500) })
+  } catch { /* 页面已关闭或消息不可用时，诊断不能影响播放和清理。 */ }
+}
 
 function stopAudioWrites(entry) {
   if (entry.writesStopped) return
@@ -57,7 +75,11 @@ async function queueAudioWrite(entry, chunk, data) {
             // Cache API 没有取消接口；超时/释放后迟到的写入不能留下孤儿块。
             if (entry.writesStopped) await cache.delete(next.key)
           })
-        } catch { entry.diskFailed = true; entry.unavailable() }
+        } catch (error) {
+          if (!entry.writesStopped) void reportAudioDiagnostic('write-chunk', error, entry.clientId)
+          entry.diskFailed = true
+          entry.unavailable()
+        }
         finally { next.pending = null; audioWriteBytes -= next.length }
       }
     } finally { entry.diskDrain = null }
@@ -129,9 +151,12 @@ function withSessions(action) {
 function sessionKey(clientId, url) {
   return new URL(`/__playback_session/${encodeURIComponent(clientId)}/${encodeURIComponent(url)}`, self.location.origin).href
 }
-async function sessionRecord(cache, key) {
+async function sessionRecord(cache, key, clientId) {
   const response = await cache.match(key)
-  try { return response ? await response.json() : null } catch { return null }
+  try { return response ? await response.json() : null } catch (error) {
+    await reportAudioDiagnostic('read-session', error, clientId)
+    return null
+  }
 }
 function saveSession(clientId, url, record) {
   return withSessions(async () => {
@@ -153,7 +178,7 @@ function forgetSession(clientId, url, captureId) {
   return withSessions(async () => {
     const cache = await caches.open(PLAYBACK_SESSIONS)
     const key = sessionKey(clientId, url)
-    const record = await sessionRecord(cache, key)
+    const record = await sessionRecord(cache, key, clientId)
     if (record?.captureId === captureId) await cache.delete(key)
   })
 }
@@ -173,7 +198,7 @@ self.addEventListener('message', event => {
   const data = event.data
   const port = event.ports?.[0]
   if (data?.type === 'holly-prune-audio' && event.source?.id) {
-    event.waitUntil?.(pruneClosedAudio().catch(() => {}))
+    event.waitUntil?.(pruneClosedAudio().catch(error => reportAudioDiagnostic('prune-audio', error, event.source.id)))
     return
   }
   if (!['holly-capture-audio', 'holly-release-audio', 'holly-cached-audio'].includes(data?.type) || !event.source?.id) return
@@ -183,7 +208,7 @@ self.addEventListener('message', event => {
   const key = `${event.source.id}:${url.href}`
   if (data.type === 'holly-cached-audio') {
     const entry = audioCaptures.get(key)
-    if (entry?.captureId === data.captureId) event.waitUntil?.(persistAudio(entry).catch(() => {}))
+    if (entry?.captureId === data.captureId) event.waitUntil?.(persistAudio(entry).catch(error => reportAudioDiagnostic('persist-audio', error, entry.clientId)))
     return
   }
   if (data.type === 'holly-release-audio') {
@@ -197,9 +222,9 @@ self.addEventListener('message', event => {
       event.waitUntil?.(entry.release())
     }
     if ((!entry || entry.captureId !== data.captureId) && typeof data.captureId === 'string') {
-      event.waitUntil?.(deleteAudioDataPrefix(event.source.id, data.captureId).catch(() => {}))
+      event.waitUntil?.(deleteAudioDataPrefix(event.source.id, data.captureId).catch(error => reportAudioDiagnostic('delete-chunks', error, event.source.id)))
     }
-    event.waitUntil?.(forgetSession(event.source.id, url.href, data.captureId).catch(() => {}))
+    event.waitUntil?.(forgetSession(event.source.id, url.href, data.captureId).catch(error => reportAudioDiagnostic('delete-session', error, event.source.id)))
     return
   }
   if (!port || !Number.isSafeInteger(data.limit) || data.limit <= 0) return
@@ -230,7 +255,8 @@ self.addEventListener('message', event => {
       entry.unavailable()
       dropAudioMemory(entry)
       port.close()
-      return (entry.download || Promise.resolve()).then(() => deleteAudioData(entry)).catch(() => {})
+      return (entry.download || Promise.resolve()).then(() => deleteAudioData(entry))
+        .catch(error => reportAudioDiagnostic('delete-chunks', error, entry.clientId))
     },
   }
   entry.writesCancelled = new Promise(resolve => { entry.stopWrites = resolve })
@@ -242,13 +268,13 @@ self.addEventListener('message', event => {
     if (event.data?.type === 'cancel') void entry.release()
     // 清空缓存/会话失效只禁止落盘，不中断仍在播放的 Audio；切歌时再 release。
     if (event.data?.type === 'cancel-cache') entry.unavailable()
-    if (event.data?.type === 'cached') void persistAudio(entry).catch(() => {})
+    if (event.data?.type === 'cached') void persistAudio(entry).catch(error => reportAudioDiagnostic('persist-audio', error, entry.clientId))
   }
   audioCaptures.set(key, entry)
   if (validSession(data, url)) {
     event.waitUntil?.(saveSession(event.source.id, url.href, {
       captureId: data.captureId, cacheName: data.cacheName, cacheKey: data.cacheKey,
-    }).catch(() => {}))
+    }).catch(error => reportAudioDiagnostic('save-session', error, event.source.id)))
   }
   port.postMessage({ type: 'ready' })
 })
@@ -321,7 +347,10 @@ function startAudioDownload(request, entry) {
         await entry.diskDrain
         if (entry.commitRequested) await persistAudio(entry)
         if (!entry.cacheCancelled && !entry.persisted) {
-          try { await audioWrite(entry, () => portComplete(entry)) } catch { entry.unavailable() }
+          try { await audioWrite(entry, () => portComplete(entry)) } catch (error) {
+            if (!entry.writesStopped) void reportAudioDiagnostic('write-manifest', error, entry.clientId)
+            entry.unavailable()
+          }
         }
       } catch (error) {
         entry.error = error
@@ -441,7 +470,11 @@ function audioBody(entry, start, end, signal) {
             try {
               const response = await (await caches.open(AUDIO_DATA_CACHE)).match(chunk.key)
               if (response && Number(response.headers.get('content-length')) === chunk.length) bytes = new Uint8Array(await response.arrayBuffer())
-            } catch { entry.diskFailed = true; entry.unavailable() }
+            } catch (error) {
+              void reportAudioDiagnostic('read-chunk', error, entry.clientId)
+              entry.diskFailed = true
+              entry.unavailable()
+            }
           }
           if (cancelled) { if (!bodyCancelled) controller.close(); return }
           if (entry.error) { stop(); controller.error(entry.error); return }
@@ -550,13 +583,17 @@ function audioResponse(request, entry, body) {
 
 async function restoreAudio(request, clientId, url) {
   try {
-    const record = await withSessions(async () => sessionRecord(await caches.open(PLAYBACK_SESSIONS), sessionKey(clientId, url.href)))
+    const record = await withSessions(async () => sessionRecord(await caches.open(PLAYBACK_SESSIONS), sessionKey(clientId, url.href), clientId))
     if (record && validSession(record, url)) {
       const response = await (await caches.open(record.cacheName)).match(record.cacheKey)
       const size = Number(response?.headers.get('content-length'))
       const type = response?.headers.get('content-type') || ''
       let track
-      try { track = JSON.parse(decodeURIComponent(response?.headers.get('x-holly-track') || '')) } catch { /* 无效元数据 */ }
+      if (response) {
+        try { track = JSON.parse(decodeURIComponent(response.headers.get('x-holly-track') || '')) } catch (error) {
+          void reportAudioDiagnostic('read-track-metadata', error, clientId)
+        }
+      }
       if (response?.status === 200 && Number.isSafeInteger(size) && size > 0
         && /^(audio\/|application\/octet-stream)/i.test(type)
         && track?.uid === url.searchParams.get('uid')
@@ -565,6 +602,7 @@ async function restoreAudio(request, clientId, url) {
         // 新缓存由流式写入校验长度；兼容旧缓存时逐块校验，仍不整首载入内存。
         if (response.headers.get('x-holly-verified-size') !== String(size)) {
           const valid = await verifyStoredLength(response, size)
+          if (!valid) void reportAudioDiagnostic('verify-audio', new Error('持久音频缓存长度不一致'), clientId)
           stored = valid ? await (await caches.open(record.cacheName)).match(record.cacheKey) : null
         }
         if (stored) return audioResponse(request, { size, type, etag: stored.headers.get('etag'),
@@ -573,7 +611,10 @@ async function restoreAudio(request, clientId, url) {
       // 淘汰/清空/损坏后删除失效指针；绝不跨账号遍历其他歌曲缓存。
       await forgetSession(clientId, url.href, record.captureId)
     }
-  } catch { /* 存储不可用时保留原生网络播放路径。 */ }
+  } catch (error) {
+    void reportAudioDiagnostic('restore-audio', error, clientId)
+    // 存储不可用时保留原生网络播放路径。
+  }
   return fetch(request)
 }
 
@@ -598,7 +639,7 @@ self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     if (DEVELOPMENT) {
       await self.clients.claim()
-      await pruneClosedAudio().catch(() => {})
+      await pruneClosedAudio().catch(error => reportAudioDiagnostic('prune-audio', error))
       return
     }
     const keys = await caches.keys()
@@ -607,7 +648,7 @@ self.addEventListener('activate', event => {
       || /^holly-(static|pages)-v\d+$/.test(key)
     ).map(key => caches.delete(key)))
     await self.clients.claim()
-    await pruneClosedAudio().catch(() => {})
+    await pruneClosedAudio().catch(error => reportAudioDiagnostic('prune-audio', error))
   })())
 })
 

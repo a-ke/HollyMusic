@@ -5,6 +5,7 @@ import { toTrack } from './types/player'
 import { preparePlaybackResponse } from './playback-response'
 import { useAuthStore } from '@/hooks/useAuth'
 import * as authApi from '@/lib/api/auth'
+import { logger } from '@/lib/logger'
 
 function memoryCaches() {
   const stores = new Map<string, Map<string, Response>>()
@@ -122,6 +123,39 @@ it('从分块清单流式落盘后确认释放，并以磁盘指针替换页面�
     await cache.put(key, new Response('WXYZ', { headers: previous!.headers }))
     // 再次读取必须来自持久缓存，不能从页面原先的完成 Promise/Blob 返回旧字节。
     expect(await (await capture.response)!.text()).toBe('WXYZ')
+  } finally { capture.cancel(); port.close() }
+})
+
+it.each(['missing', 'invalid-json', 'invalid-manifest', 'missing-chunk', 'storage-error'])('共享音频 %s 时保留诊断，正常未命中保持安静', async scenario => {
+  const warning = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+  let port!: MessagePort
+  let captureId = ''
+  vi.stubGlobal('navigator', { onLine: true, serviceWorker: { controller: {
+    postMessage: (data: { captureId: string }, ports?: MessagePort[]) => {
+      if (ports?.[0]) { captureId = data.captureId; port = ports[0]; port.postMessage({ type: 'ready' }) }
+    },
+  } } })
+  const capture = preparePlaybackResponse('alice', '/api/audio?uid=kw-1&quality=320k', OFFLINE_DEFAULT_LIMIT_BYTES)!
+  try {
+    await capture.ready
+    const base = `https://holly.test/__playback_data/alice-tab/${captureId}/`
+    const cache = await caches.open('holly-playback-data-v1')
+    if (scenario !== 'missing') {
+      await cache.put(base + 'complete', new Response(scenario === 'invalid-json' ? '{' : JSON.stringify({
+        version: scenario === 'invalid-manifest' ? 99 : 1, size: 4,
+        headers: { 'content-type': 'audio/mpeg', 'content-length': '4' }, chunks: [{ key: base + '0', length: 4 }],
+      })))
+    }
+    if (scenario === 'storage-error') vi.spyOn(caches, 'open').mockRejectedValue(new DOMException('disk unavailable', 'InvalidStateError'))
+    port.postMessage({ type: 'complete', cacheName: 'holly-playback-data-v1', cacheKey: base + 'complete' })
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await capture.response
+      if (scenario === 'missing-chunk') await expect(response!.text()).rejects.toThrow('缓存分块不可用')
+      else expect(response).toBeNull()
+    }
+    expect(warning).toHaveBeenCalledTimes(scenario === 'missing' ? 0 : 1)
+    if (scenario !== 'missing') expect(warning).toHaveBeenCalledWith('[playback] 读取共享音频缓存失败',
+      expect.objectContaining({ name: expect.any(String), message: expect.any(String) }))
   } finally { capture.cancel(); port.close() }
 })
 
@@ -299,6 +333,7 @@ it('按实际空间和最近使用顺序清理；单曲超过总容量时保留�
 })
 
 it.each(['QuotaExceededError', 'UnknownError'])('写入新歌曲失败（%s）时不淘汰任何旧歌曲', async name => {
+  const warning = vi.spyOn(logger, 'warn').mockImplementation(() => {})
   await seed('old', 250, 1)
   await seed('recent', 250, 2)
   const cache = await caches.open('holly-audio-v1:alice')
@@ -310,6 +345,7 @@ it.each(['QuotaExceededError', 'UnknownError'])('写入新歌曲失败（%s）�
   expect(deleted.mock.calls.filter(([key]) => String(key).includes('/__offline_audio/'))).toEqual([])
   expect((await listOfflineTracks('alice')).map(item => item.track.uid)).toEqual(['kw-recent', 'kw-old'])
   expect(window.dispatchEvent).not.toHaveBeenCalled()
+  expect(warning).toHaveBeenCalledWith('[offline] 歌曲缓存失败，不影响在线播放', { name, message: '存储失败' })
 })
 
 it('新歌曲写入期间取消，只移除新歌曲，旧歌曲完整保留且通知刷新', async () => {

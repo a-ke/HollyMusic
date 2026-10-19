@@ -2,28 +2,40 @@
 import { createHash } from 'node:crypto'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { Script } from 'node:vm'
 import path from 'node:path'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-const dist = path.join(root, 'frontend/dist')
+const SHELL_RESOURCES = [
+  '/', '/manifest.json', '/icon.svg', '/theme-init.js',
+  '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/icons/apple-touch-icon.png',
+]
 async function walk(directory) {
   const entries = await readdir(directory, { withFileTypes: true })
   const nested = await Promise.all(entries.map(entry => entry.isDirectory()
     ? walk(path.join(directory, entry.name)) : [path.join(directory, entry.name)]))
   return nested.flat()
 }
-const assets = (await Promise.all(['assets', 'icons'].map(directory => walk(path.join(dist, directory))))).flat()
-  .filter(file => !file.endsWith('.map'))
-  .map(file => '/' + path.relative(dist, file).split(path.sep).join('/')).sort()
-const source = await readFile(path.join(root, 'public/sw.js'), 'utf8')
-const defaults = JSON.parse(source.match(/const PRECACHE = (\[[^\n]+\])/)[1].replaceAll("'", '"'))
-const resources = [...new Set([...defaults, ...assets])]
-const hash = createHash('sha256')
-hash.update(source)
-for (const resource of resources) {
-  hash.update(resource)
-  hash.update(await readFile(path.join(dist, resource === '/' ? 'index.html' : resource.slice(1))))
+
+export async function buildServiceWorker(projectRoot = root) {
+  const dist = path.join(projectRoot, 'frontend/dist')
+  const assets = (await Promise.all(['assets', 'icons'].map(directory => walk(path.join(dist, directory))))).flat()
+    .filter(file => !file.endsWith('.map'))
+    .map(file => '/' + path.relative(dist, file).split(path.sep).join('/'))
+  const resources = [...new Set([...SHELL_RESOURCES, ...assets])].sort()
+  const source = await readFile(path.join(projectRoot, 'public/sw.js'), 'utf8')
+  const hash = createHash('sha256').update(source)
+  for (const resource of resources) {
+    hash.update(resource)
+    // 必需资源缺失时构建失败，不发布不完整的离线应用壳。
+    hash.update(await readFile(path.join(dist, resource === '/' ? 'index.html' : resource.slice(1))))
+  }
+  const config = { version: hash.digest('hex').slice(0, 16), precache: resources }
+  // 配置独立于 Worker 源码，源码改引号、换行或变量排版都不影响注入。
+  const sw = `self.__HOLLY_SW_BUILD__ = ${JSON.stringify(config)};\n${source}`
+  new Script(sw, { filename: 'sw.js' })
+  await writeFile(path.join(dist, 'sw.js'), sw)
+  return config
 }
-const sw = source.replace("const VERSION = 'shell-dev'", `const VERSION = '${hash.digest('hex').slice(0, 16)}'`)
-  .replace(/const PRECACHE = \[[^\n]+\]/, `const PRECACHE = ${JSON.stringify(resources)}`)
-await writeFile(path.join(dist, 'sw.js'), sw)
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await buildServiceWorker()
