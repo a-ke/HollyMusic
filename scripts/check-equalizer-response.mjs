@@ -26,6 +26,14 @@ try {
   const profile = join(directory, 'profile')
   const child = spawn(chrome, ['--headless', '--no-first-run', '--no-default-browser-check',
     `--user-data-dir=${profile}`, '--remote-debugging-port=0', pathToFileURL(page).href], { stdio: 'ignore', windowsHide: true })
+  let exited = false
+  const closed = new Promise(resolve => child.once('close', () => { exited = true; resolve() }))
+  const waitForExit = async milliseconds => {
+    let timer
+    try {
+      await Promise.race([closed, new Promise(resolve => { timer = setTimeout(resolve, milliseconds) })])
+    } finally { clearTimeout(timer) }
+  }
   let launchError
   child.on('error', error => { launchError = error })
   let socket
@@ -74,15 +82,22 @@ try {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
     if (!report.passed) process.exitCode = 1
   } finally {
-    socket?.close()
-    if (child.exitCode === null && !launchError) {
-      const closed = new Promise(resolve => {
-        const timeout = setTimeout(resolve, 2000)
-        child.once('close', () => { clearTimeout(timeout); resolve() })
-      })
-      child.kill('SIGTERM')
-      await closed
+    // 先让浏览器自行结束后台任务及 profile 写入。直接杀主进程可能留下
+    // 仍在写目录的子进程，Linux CI 会在删除临时目录时触发 ENOTEMPTY。
+    if (!exited && socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ id: 0, method: 'Browser.close' }))
+      await waitForExit(10000)
     }
+    if (!exited && !launchError) {
+      child.kill('SIGTERM')
+      await waitForExit(5000)
+      if (!exited) {
+        child.kill('SIGKILL')
+        await waitForExit(5000)
+      }
+      if (!exited) throw new Error('测试浏览器未能退出。')
+    }
+    socket?.close()
   }
 } finally {
   rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
