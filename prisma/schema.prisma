@@ -90,6 +90,7 @@ model User {
   updatedAt      DateTime @updatedAt
 
   favorites Favorite[]
+  favoritePlaylists FavoritePlaylist[]
   playlists Playlist[]
   playlistAllowedUsers PlaylistAllowedUser[]
 }
@@ -106,6 +107,24 @@ model Favorite {
 
   @@unique([userId, itemType, itemId, source])
   @@index([itemId])
+}
+
+/// 平台歌单的收藏引用。展示信息为收藏时快照，曲目仍从原平台读取。
+model FavoritePlaylist {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  source     String
+  playlistId String
+  name       String
+  cover      String
+  author     String
+  songCount  Int
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, source, playlistId])
+  @@index([userId, createdAt])
 }
 
 model Playlist {

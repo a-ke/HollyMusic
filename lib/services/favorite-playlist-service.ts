@@ -1,0 +1,43 @@
+import { PrismaClient } from '@/lib/generated/prisma'
+import type { FavoritePlaylist, FavoritePlaylistInput } from '@/lib/api/favorite-playlists'
+import type { DiscoverySource } from '@/lib/services/discovery-service'
+
+const prisma = new PrismaClient()
+
+function toFavorite(row: {
+  source: string; playlistId: string; name: string; cover: string
+  author: string; songCount: number; createdAt: Date
+}): FavoritePlaylist {
+  return {
+    source: row.source as DiscoverySource,
+    playlistId: row.playlistId,
+    name: row.name,
+    cover: row.cover,
+    author: row.author,
+    songCount: row.songCount,
+    createdAt: row.createdAt.toISOString(),
+  }
+}
+
+export async function listFavoritePlaylists(userId: number): Promise<{ list: FavoritePlaylist[] }> {
+  const rows = await prisma.favoritePlaylist.findMany({
+    where: { userId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+  })
+  return { list: rows.map(toFavorite) }
+}
+
+/** 只保存引用和展示快照，不创建本地歌单或复制曲目。 */
+export async function saveFavoritePlaylist(userId: number, playlist: FavoritePlaylistInput): Promise<FavoritePlaylist> {
+  const { source, playlistId, name, cover, author, songCount } = playlist
+  const row = await prisma.favoritePlaylist.upsert({
+    where: { userId_source_playlistId: { userId, source, playlistId } },
+    create: { userId, source, playlistId, name, cover, author, songCount },
+    update: { name, cover, author, songCount },
+  })
+  return toFavorite(row)
+}
+
+export async function removeFavoritePlaylist(userId: number, source: DiscoverySource, playlistId: string): Promise<{ removed: true }> {
+  await prisma.favoritePlaylist.deleteMany({ where: { userId, source, playlistId } })
+  return { removed: true }
+}
