@@ -4,6 +4,10 @@ import { resolveSubsonicMediaMeta, toDurationSeconds } from './subsonic-media'
 import { type AuthResult } from './auth'
 import { PrismaClient, Prisma } from './generated/prisma'
 import { logger } from './logger'
+import {
+    handleDeleteFavoritePlaylist, handleGetFavoritePlaylist, isFavoritePlaylistId,
+    listSubsonicFavoritePlaylists, rejectFavoritePlaylistEdit,
+} from './subsonic-playlist-favorites'
 
 const prisma = new PrismaClient()
 
@@ -58,7 +62,8 @@ export async function handleGetPlaylists(request: NextRequest, authRes: AuthResu
             return node
         })
 
-        return respond(request, { playlists: { playlist: playlistNodes } })
+        playlistNodes.push(...await listSubsonicFavoritePlaylists(authRes))
+        return respond(request, { playlists: { playlist: playlistNodes } }, { headers: { 'Cache-Control': 'no-store' } })
     } catch (err) {
         logger.error('[getPlaylists] Error:', err)
         return subsonicError(request, 0, 'Internal server error')
@@ -74,6 +79,10 @@ export async function handleGetPlaylist(request: NextRequest, authRes: AuthResul
         const idStr = url.searchParams.get('id')
         if (!idStr) {
             return subsonicError(request, 10, 'Missing required parameter: id')
+        }
+
+        if (isFavoritePlaylistId(idStr)) {
+            return await handleGetFavoritePlaylist(request, authRes, idStr)
         }
 
         const playlistId = parseInt(idStr, 10)
@@ -206,6 +215,7 @@ export async function handleCreatePlaylist(request: NextRequest, authRes: AuthRe
 
         // 更新现有播放列表
         if (playlistId) {
+            if (isFavoritePlaylistId(playlistId)) return rejectFavoritePlaylistEdit(request, authRes)
             const id = parseInt(playlistId, 10)
             if (isNaN(id)) {
                 return subsonicError(request, 70, 'Invalid playlist id')
@@ -295,6 +305,10 @@ export async function handleDeletePlaylist(request: NextRequest, authRes: AuthRe
             return subsonicError(request, 10, 'Missing required parameter: id')
         }
 
+        if (isFavoritePlaylistId(idStr)) {
+            return await handleDeleteFavoritePlaylist(request, authRes, idStr)
+        }
+
         const id = parseInt(idStr, 10)
         if (isNaN(id)) {
             return subsonicError(request, 70, 'Invalid playlist id')
@@ -338,6 +352,8 @@ export async function handleUpdatePlaylist(request: NextRequest, authRes: AuthRe
         if (!playlistIdStr) {
             return subsonicError(request, 10, 'Missing required parameter: playlistId')
         }
+
+        if (isFavoritePlaylistId(playlistIdStr)) return rejectFavoritePlaylistEdit(request, authRes)
 
         const playlistId = parseInt(playlistIdStr, 10)
         if (isNaN(playlistId)) {

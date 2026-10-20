@@ -8,6 +8,7 @@ import * as dbAPI from './db'
 import { logger } from './logger'
 import { fetchLyricForMusic } from './services/lyrics'
 import { getPlaylistCoverForUser } from './services/playlist-service'
+import { getSubsonicFavoritePlaylist, isFavoritePlaylistId, loadFavoritePlaylistDetail } from './subsonic-playlist-favorites'
 import type { MusicInfo } from './types/music'
 
 // 原生封面获取模块（参考 lx-music 各源 pic 实现），替代黑盒脚本与第三方聚合 API
@@ -71,6 +72,8 @@ export async function handleCoverArtAsync(request: NextRequest, authRes: AuthRes
 
 /** `pl-{id}` 是 Subsonic 歌单封面标识，回退到第一首歌的封面。 */
 async function servePlaylistCoverArt(request: NextRequest, authRes: AuthResult, coverId: string): Promise<Response> {
+  const id = coverId.slice(3)
+  if (isFavoritePlaylistId(id)) return serveFavoritePlaylistCoverArt(request, authRes, id)
   const playlistId = Number(coverId.slice(3))
   if (!Number.isSafeInteger(playlistId) || playlistId <= 0) return serveDefaultCoverArt(request)
 
@@ -99,6 +102,36 @@ async function servePlaylistCoverArt(request: NextRequest, authRes: AuthResult, 
     logger.warn('[getCoverArt] Failed to resolve playlist cover:', err)
     return serveDefaultCoverArt(request)
   }
+}
+
+async function serveFavoritePlaylistCoverArt(request: NextRequest, authRes: AuthResult, id: string): Promise<Response> {
+  try {
+    const playlist = await getSubsonicFavoritePlaylist(id, authRes)
+    if (!playlist) return serveDefaultCoverArt(request)
+
+    const fetchCover = async (url: string | null | undefined): Promise<Response | null> => {
+      if (!url || !isHttpUrl(url)) return null
+      const response = await fetchImageFromUrl(url)
+      // 收藏属于个人资料，不能让共享缓存绕过账号权限。
+      if (response) response.headers.set('Cache-Control', 'private, max-age=300')
+      return response
+    }
+    const snapshotCover = await fetchCover(playlist.cover)
+    if (snapshotCover) return snapshotCover
+
+    // 快照地址过期时，再复用发现页详情取得最新封面或首曲封面。
+    const detail = await loadFavoritePlaylistDetail(playlist)
+    const liveCover = detail?.cover !== playlist.cover ? await fetchCover(detail?.cover) : null
+    if (liveCover) return liveCover
+    const firstTrack = detail?.tracks[0]
+    if (firstTrack) {
+      const trackCover = await fetchCover(await getPicNative(firstTrack))
+      if (trackCover) return trackCover
+    }
+  } catch (err) {
+    logger.warn('[getCoverArt] Failed to resolve platform favorite cover:', err)
+  }
+  return serveDefaultCoverArt(request)
 }
 
 function isHttpUrl(value: string): boolean {

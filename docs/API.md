@@ -42,6 +42,15 @@
 - `getPlaylists`、`getPlaylist`、`createPlaylist`、`updatePlaylist`、`deletePlaylist`：歌单及歌单曲目管理
 - `getAlbumList2`、`getAlbum`、`getLyricsBySongId`、`getOpenSubsonicExtensions`：专辑、结构化歌词与 OpenSubsonic 客户端兼容
 
+### 平台收藏歌单
+
+网页收藏的 QQ、网易云、酷我、酷狗、咪咕歌单会出现在同一账号的 `getPlaylists` 中，名称带平台标识。列表使用收藏时的快照；打开 `getPlaylist` 时复用发现音乐的详情缓存（10 分钟），读取原平台内容，并沿用现有歌曲播放、封面、歌词和喜爱状态。
+
+- 收藏使用 `fp-{收藏记录ID}`，本地歌单仍用数字 ID；封面为 `pl-fp-{收藏记录ID}`，也兼容客户端追加的 `al-` 前缀。
+- 收藏内容只读：`createPlaylist` 指定收藏 ID 或 `updatePlaylist` 修改收藏时返回错误 50。需要编辑时，可将歌曲添加到本地歌单。
+- `deletePlaylist` 对收藏 ID 仅取消当前账号在 Holly Music 中的收藏，不会删除平台原歌单或歌曲；网页下次加载收藏列表时同步体现。
+- 原平台暂时不可用时，详情返回错误，收藏仍保留。收藏列表和封面都要求有效 token，即使服务器开启匿名读取也不能冒用用户名访问收藏。
+
 ### 播放音质与原格式
 
 `stream` 与网页共用选档规则：优先指定档位，其次选择不高于该档位的最高支持档；如果只有更高档位，则选择其中最低档以保证可播放。
