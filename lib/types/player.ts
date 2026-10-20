@@ -4,6 +4,7 @@
 
 import type { MusicInfo, QualityType, SourceType } from './music'
 
+/** loop=单曲循环，sequence=列表循环（保留旧键以兼容已保存的偏好），random=随机播放。 */
 export type PlaybackMode = 'loop' | 'sequence' | 'random'
 
 /**

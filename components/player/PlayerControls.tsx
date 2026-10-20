@@ -1,11 +1,10 @@
-
 import { usePlayerStore } from '@/lib/store/player-store'
 import { PlayerButton } from './PlayerButton'
 import { TransportButtons } from './TransportButtons'
 import { SeekBar } from './SeekBar'
 import { QualityPopover } from './QualityPopover'
 import { AudioSpectrum } from './AudioSpectrum'
-import { Repeat, Repeat1, Shuffle } from 'lucide-react'
+import { PLAYBACK_MODE_CONFIG } from './playback-modes'
 
 /**
  * 桌面端播放控制、频谱与进度；手机只保留进度。
@@ -14,8 +13,7 @@ export function PlayerControls({ audio, isPlaying }: { audio: HTMLAudioElement |
   const playbackMode = usePlayerStore(s => s.playbackMode)
   const cyclePlaybackMode = usePlayerStore(s => s.cyclePlaybackMode)
 
-  const ModeIcon = playbackMode === 'loop' ? Repeat1 : playbackMode === 'random' ? Shuffle : Repeat
-  const modeLabel = playbackMode === 'loop' ? '单曲循环' : playbackMode === 'random' ? '随机播放' : '顺序播放'
+  const { icon: ModeIcon, label: modeLabel } = PLAYBACK_MODE_CONFIG[playbackMode]
 
   return (
     <div className="flex min-w-0 flex-1 flex-col items-center gap-1">

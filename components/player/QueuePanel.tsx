@@ -1,8 +1,7 @@
-
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
+import { X, Trash2 } from 'lucide-react'
 import { usePlayerStore } from '@/lib/store/player-store'
 import { CoverImage } from '@/components/shared/CoverImage'
-import { X, Trash2 } from 'lucide-react'
 import { ModalMask } from '@/components/shared/ModalMask'
 
 export function QueuePanel() {
@@ -19,6 +18,21 @@ export function QueuePanel() {
   const playFromPlayNext = usePlayerStore(s => s.playFromPlayNext)
   const removeFromPlayNext = usePlayerStore(s => s.removeFromPlayNext)
   const clearPlayNext = usePlayerStore(s => s.clearPlayNext)
+
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const currentTrackRef = useRef<HTMLDivElement>(null)
+
+  // 每次打开时定位；只滚动队列容器，在首次绘制前完成，避免先显示顶部再跳动。
+  useLayoutEffect(() => {
+    if (!isOpen) return
+    const container = scrollRef.current
+    const current = currentTrackRef.current
+    if (!container || !current) return
+    const containerRect = container.getBoundingClientRect()
+    const currentRect = current.getBoundingClientRect()
+    container.scrollTop = Math.max(0, container.scrollTop + currentRect.top - containerRect.top
+      - (container.clientHeight - currentRect.height) / 2)
+  }, [isOpen])
 
   // WAI-ARIA 对话框模式：Esc 关闭（输入框聚焦时除外，避免打断输入）
   useEffect(() => {
@@ -66,12 +80,12 @@ export function QueuePanel() {
             </button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-2">
           {/* 正在播放的插播曲（主队列游标冻结，该曲播完回到下方队列高亮处继续） */}
           {isCurrentTempPlay && currentTrack && (
             <div className="mb-2 border-b border-border pb-2">
               <div className="px-2 pb-1 text-xs text-muted-foreground">正在播放 · 插播</div>
-              <div className="flex items-center gap-3 rounded-md bg-accent p-2">
+              <div ref={currentTrackRef} aria-current="true" className="flex items-center gap-3 rounded-md bg-accent p-2">
                 <CoverImage uid={currentTrack.uid} className="h-10 w-10" />
                 <div className="min-w-0">
                   <div className="truncate text-sm text-primary">{currentTrack.name}</div>
@@ -124,6 +138,8 @@ export function QueuePanel() {
             queue.map((t, i) => (
               <div
                 key={`${t.uid}-${i}`}
+                ref={!isCurrentTempPlay && i === currentIndex ? currentTrackRef : undefined}
+                aria-current={!isCurrentTempPlay && i === currentIndex ? 'true' : undefined}
                 className={`group flex items-center gap-3 rounded-md p-2 ${
                   i === currentIndex ? 'bg-accent' : 'hover:bg-accent/50'
                 }`}

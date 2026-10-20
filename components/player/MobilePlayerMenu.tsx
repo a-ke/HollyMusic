@@ -6,17 +6,18 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { MoreHorizontal, Timer, Volume2, VolumeX, ChevronDown, SkipBack, SkipForward, Heart, Share2, Mic2 } from 'lucide-react'
 import { usePlayerStore } from '@/lib/store/player-store'
 import { useLyricsPanel } from '@/hooks/useLyricsPanel'
 import { useFavoritesStore } from '@/lib/store/favorites-store'
 import { shareContent, buildSongShareUrl } from '@/lib/share'
 import { toast } from '@/lib/toast'
+import { QUALITY_LABEL, QUALITY_ORDER } from '@/lib/quality-options'
 import { EqualizerButton } from './EqualizerPanel'
 import { ProgressBar } from './ProgressBar'
 import { PlayerButton } from './PlayerButton'
 import { QualityList } from './QualityList'
-import { MoreHorizontal, Repeat, Repeat1, Shuffle, Timer, Volume2, VolumeX, ChevronDown, SkipBack, SkipForward, Heart, Share2, Mic2 } from 'lucide-react'
-import { QUALITY_LABEL, QUALITY_ORDER } from '@/lib/quality-options'
+import { PLAYBACK_MODE_CONFIG } from './playback-modes'
 
 export function MobilePlayerMenu({ onOpenEqualizer }: { onOpenEqualizer?: () => void }) {
   const [open, setOpen] = useState(false)
@@ -67,8 +68,7 @@ export function MobilePlayerMenu({ onOpenEqualizer }: { onOpenEqualizer?: () => 
     setPos(window.innerHeight - r.top + 8)
   }, [open])
 
-  const ModeIcon = playbackMode === 'loop' ? Repeat1 : playbackMode === 'random' ? Shuffle : Repeat
-  const modeLabel = playbackMode === 'loop' ? '单曲循环' : playbackMode === 'random' ? '随机播放' : '顺序播放'
+  const { icon: ModeIcon, label: modeLabel } = PLAYBACK_MODE_CONFIG[playbackMode]
   const VolIcon = isMuted || volume === 0 ? VolumeX : Volume2
 
   const types = currentTrack?.musicInfo.types
