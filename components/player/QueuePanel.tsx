@@ -1,8 +1,7 @@
-
 import { useEffect, useLayoutEffect, useRef } from 'react'
+import { X, Trash2 } from 'lucide-react'
 import { usePlayerStore } from '@/lib/store/player-store'
 import { CoverImage } from '@/components/shared/CoverImage'
-import { X, Trash2 } from 'lucide-react'
 import { ModalMask } from '@/components/shared/ModalMask'
 
 export function QueuePanel() {

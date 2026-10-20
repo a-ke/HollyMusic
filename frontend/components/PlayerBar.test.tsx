@@ -100,6 +100,17 @@ afterEach(async () => {
 })
 
 describe('PC 与移动端共用播放器', () => {
+  it('桌面和手机共享三种模式名称，从任一入口切换都会同步', async () => {
+    await click(container.querySelector('button[aria-label="更多"]'))
+    const mobileMode = () => [...container.querySelectorAll('button')].find(button => button.textContent?.includes('播放模式'))!
+    for (const [index, label] of ['列表循环', '单曲循环', '随机播放', '列表循环'].entries()) {
+      const desktopMode = container.querySelector(`button[aria-label="${label}"]`)
+      expect(desktopMode).not.toBeNull()
+      expect(mobileMode().textContent).toContain(label)
+      if (index < 3) await click(index === 1 ? mobileMode() : desktopMode)
+    }
+  })
+
   it.each([
     { entry: '恢复播放', resume: false },
     { entry: '恢复播放', resume: true },
@@ -391,6 +402,48 @@ describe('PC 与移动端共用播放器', () => {
     expect(usePlayerStore.getState()).toMatchObject({ currentIndex: 1, isPlaying: true })
     expect(audio.src).toContain('kw-second')
     expect(audio.paused).toBe(false)
+  })
+
+  it('队尾连续插播两首后回到主队列首曲，插播不加入下一轮', async () => {
+    const extraA = makeTrack('extra-a')
+    const extraB = makeTrack('extra-b')
+    await act(async () => {
+      await usePlayerStore.getState().playTrack(second, [track, second])
+      usePlayerStore.getState().addToQueue(extraA)
+      usePlayerStore.getState().addToQueue(extraB)
+    })
+    await ready()
+    for (const expected of [extraA, extraB, track, second, track]) {
+      await act(async () => endAudio())
+      expect(usePlayerStore.getState().currentTrack?.uid).toBe(expected.uid)
+      expect(audio.src).toContain(expected.uid)
+      expect(audio.paused).toBe(false)
+      expect(usePlayerStore.getState().queue).toEqual([track, second])
+      await ready()
+    }
+    expect(usePlayerStore.getState()).toMatchObject({ currentIndex: 0, isCurrentTempPlay: false, playNextQueue: [] })
+  })
+
+  it('队尾循环等待缓存时暂停，缓存返回后首曲保持暂停', async () => {
+    await act(async () => usePlayerStore.getState().playTrack(second, [track, second]))
+    await ready()
+    const auth = useAuthStore.getState()
+    let resolveCache!: (value: null) => void
+    vi.spyOn(offlineAudio, 'getOfflineAudio').mockImplementationOnce(() => new Promise(resolve => { resolveCache = resolve }))
+    try {
+      await act(async () => {
+        useAuthStore.setState({ username: 'alice', authenticated: false, offlineUsername: null })
+        endAudio()
+      })
+      expect(usePlayerStore.getState()).toMatchObject({ currentIndex: 0, isFetchingUrl: true })
+      await act(async () => usePlayerStore.getState().setIsPlaying(false))
+      await act(async () => resolveCache(null))
+      await ready()
+      expect(usePlayerStore.getState()).toMatchObject({ currentIndex: 0, isPlaying: false, isFetchingUrl: false })
+      expect(audio.paused).toBe(true)
+    } finally {
+      await act(async () => useAuthStore.setState(auth, true))
+    }
   })
 
   it('暂停后拖动不会恢复播放，播放中拖动也不会重置到开头', async () => {
