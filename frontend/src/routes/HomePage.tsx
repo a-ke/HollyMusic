@@ -155,21 +155,20 @@ export function HomePage({ active = true }: { active?: boolean }) {
 
   return (
     <div className="page-shell">
-      <div className="mb-6 flex items-center justify-between gap-3">
+      <div className="mb-4 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1 border-b border-border/50 pb-3 desktop:mb-6 desktop:gap-x-3 desktop:gap-y-6">
         <div className="hidden desktop:block"><h1 className="page-title">发现音乐</h1><p className="mt-2 text-sm text-muted-foreground">从熟悉的旋律，到下一首心动。</p></div>
-        <p className="text-sm text-muted-foreground desktop:hidden">为今天选一些好音乐</p>
-        <div className="flex shrink-0 items-center gap-2">
-          <Link to="/search" className="flex h-10 items-center gap-2 rounded-full border border-border/60 bg-card px-3 text-sm text-muted-foreground transition hover:border-primary/30 hover:text-primary" aria-label="搜索音乐"><Search className="h-4 w-4" /><span className="hidden lg:inline">搜索歌曲、歌手</span></Link>
-          <button onClick={refresh} className="flex h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-card text-muted-foreground transition hover:border-primary/30 hover:text-primary disabled:opacity-50" disabled={isLoading} aria-label="刷新"><RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} /></button>
+        <div className="col-start-2 row-start-1 flex shrink-0 items-center gap-1 desktop:gap-2">
+          <Link to="/search" className="flex h-10 w-9 items-center justify-center gap-2 rounded-full border border-border/60 bg-card text-sm text-muted-foreground transition hover:border-primary/30 hover:text-primary desktop:w-auto desktop:px-3" aria-label="搜索音乐"><Search className="h-4 w-4" /><span className="hidden desktop:inline">搜索歌曲、歌手</span></Link>
+          <button onClick={refresh} className="flex h-10 w-9 items-center justify-center rounded-full border border-border/60 bg-card text-muted-foreground transition hover:border-primary/30 hover:text-primary disabled:opacity-50 desktop:w-10" disabled={isLoading} aria-label="刷新"><RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} /></button>
         </div>
-      </div>
 
-      <div className="mb-6 flex flex-wrap gap-1 border-b border-border/50 pb-3" role="tablist" aria-label="音乐渠道">
-        {CHANNELS.map(channel => (
-          <button key={channel.source} onClick={() => { setSearchParams({ source: channel.source }); setToplists([]); setPlaylists([]); setShowAllToplists(false) }} className={`rounded-full px-3 py-2 text-xs font-medium transition sm:px-4 sm:text-sm ${source === channel.source ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}`} role="tab" aria-label={channel.label} aria-selected={source === channel.source}>
-            {channel.label.slice(0, 2)}<span className="hidden desktop:inline">{channel.label.slice(2)}</span>
-          </button>
-        ))}
+        <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden desktop:col-span-2 desktop:row-start-2 desktop:flex-wrap desktop:gap-1" role="tablist" aria-label="音乐渠道">
+          {CHANNELS.map(channel => (
+            <button key={channel.source} onClick={() => { setSearchParams({ source: channel.source }); setToplists([]); setPlaylists([]); setShowAllToplists(false) }} className={`min-h-10 shrink-0 whitespace-nowrap rounded-full px-2 py-2 text-xs font-medium transition sm:px-4 sm:text-sm ${source === channel.source ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}`} role="tab" aria-label={channel.label} aria-selected={source === channel.source}>
+              {channel.label.slice(0, 2)}<span className="hidden desktop:inline">{channel.label.slice(2)}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {featuredPlaylist && !keywordParam && (
