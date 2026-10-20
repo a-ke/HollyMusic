@@ -68,7 +68,7 @@ export function MobilePlayerMenu({ onOpenEqualizer }: { onOpenEqualizer?: () => 
   }, [open])
 
   const ModeIcon = playbackMode === 'loop' ? Repeat1 : playbackMode === 'random' ? Shuffle : Repeat
-  const modeLabel = playbackMode === 'loop' ? '单曲循环' : playbackMode === 'random' ? '随机播放' : '顺序播放'
+  const modeLabel = playbackMode === 'loop' ? '单曲循环' : playbackMode === 'random' ? '随机播放' : '列表循环'
   const VolIcon = isMuted || volume === 0 ? VolumeX : Volume2
 
   const types = currentTrack?.musicInfo.types

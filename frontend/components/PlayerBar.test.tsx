@@ -300,7 +300,7 @@ describe('PC 与移动端共用播放器', () => {
 
   it.each(['PC', '手机'])('%s 入口启用单曲循环后连续两次结束都真正重播', async device => {
     if (device === 'PC') {
-      await click(container.querySelector('button[aria-label="顺序播放"]'))
+      await click(container.querySelector('button[aria-label="列表循环"]'))
     } else {
       await click(container.querySelector('button[aria-label="更多"]'))
       await click([...container.querySelectorAll('button')].find(b => b.textContent?.includes('播放模式')) ?? null)
@@ -370,12 +370,27 @@ describe('PC 与移动端共用播放器', () => {
     expect(usePlayerStore.getState().playNextQueue).toHaveLength(0)
   })
 
-  it('顺序播放到队尾停止，不误触发循环', async () => {
+  it('列表循环只有一首时，结束后从头继续播放', async () => {
     const plays = audio.play.mock.calls.length
     await act(async () => { endAudio() })
-    expect(usePlayerStore.getState().isPlaying).toBe(false)
-    expect(audio.paused).toBe(true)
-    expect(audio.play).toHaveBeenCalledTimes(plays)
+    expect(usePlayerStore.getState().isPlaying).toBe(true)
+    expect(audio.paused).toBe(false)
+    expect(audio.currentTime).toBe(0)
+    expect(audio.play).toHaveBeenCalledTimes(plays + 1)
+  })
+
+  it('列表循环播到队尾后回到第一首，并继续下一轮', async () => {
+    await act(async () => { await usePlayerStore.getState().playTrack(second, [track, second]) })
+    await ready()
+    await act(async () => { endAudio() })
+    expect(usePlayerStore.getState()).toMatchObject({ currentIndex: 0, isPlaying: true })
+    expect(audio.src).toContain('kw-first')
+    expect(audio.paused).toBe(false)
+    await ready()
+    await act(async () => { endAudio() })
+    expect(usePlayerStore.getState()).toMatchObject({ currentIndex: 1, isPlaying: true })
+    expect(audio.src).toContain('kw-second')
+    expect(audio.paused).toBe(false)
   })
 
   it('暂停后拖动不会恢复播放，播放中拖动也不会重置到开头', async () => {

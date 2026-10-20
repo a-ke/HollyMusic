@@ -391,23 +391,19 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   },
 
   handleTrackEnd: () => {
-    // 插播队列优先于一切模式：随机不跳过、单曲循环被打断、顺序播到队尾也不提前停止
+    // 插播队列优先于一切模式：随机不跳过、单曲循环被打断、列表循环先消费插播
     if (get().playNextQueue.length > 0) {
       get().playFromPlayNext(0)
       return
     }
-    const { playbackMode, queue, currentIndex, currentTrack } = get()
+    const { playbackMode, queue, currentTrack } = get()
     if (playbackMode === 'loop' && currentTrack) {
       // 单曲/插播都可重播。保留实际音质，由独立请求触发 seek(0) + play()。
       set(s => ({ currentTime: 0, seekTarget: null, streamNonce: s.streamNonce + 1, isPlaying: true }))
       return
     }
     if (queue.length === 0) return
-    if (playbackMode === 'sequence' && currentIndex >= queue.length - 1) {
-      // 顺序播放到末尾：停止
-      set({ isPlaying: false, currentTime: 0 })
-      return
-    }
+    // 列表循环与随机播放统一由 next() 选择下一首；队尾按取模回到首曲。
     get().next()
   },
 

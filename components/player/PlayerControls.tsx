@@ -15,7 +15,7 @@ export function PlayerControls({ audio, isPlaying }: { audio: HTMLAudioElement |
   const cyclePlaybackMode = usePlayerStore(s => s.cyclePlaybackMode)
 
   const ModeIcon = playbackMode === 'loop' ? Repeat1 : playbackMode === 'random' ? Shuffle : Repeat
-  const modeLabel = playbackMode === 'loop' ? '单曲循环' : playbackMode === 'random' ? '随机播放' : '顺序播放'
+  const modeLabel = playbackMode === 'loop' ? '单曲循环' : playbackMode === 'random' ? '随机播放' : '列表循环'
 
   return (
     <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
