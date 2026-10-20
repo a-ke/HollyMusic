@@ -42,7 +42,8 @@ function getAudioContextConstructor(): AudioContextConstructor | null {
  * iOS（含 iPadOS 与主屏 PWA）默认禁用频谱接管：元素一旦接入
  * MediaElementAudioSourceNode，音频就只能经 AudioContext 输出，而 iOS 在
  * 退后台/锁屏时会挂起 AudioContext——HTML5 本可后台续播的音频被无声杀死。
- * 接管不可逆，因此默认不接管；只有用户明确启用 EQ 才接入，并在面板提示后台限制。
+ * 接管不可逆，因此默认不接管；只有用户明确启用 EQ 才接入。
+ * 关闭 EQ 时由 useAudioPlayer 销毁此链路并替换元素，恢复原生输出。
  */
 export function isAppleMobile(): boolean {
   if (typeof navigator === 'undefined') return false

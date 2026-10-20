@@ -47,6 +47,6 @@ export function EqualizerOutputSettings() {
         <button type="button" aria-label={`删除预设 ${preset.name}`} onClick={() => { remove(preset.id); setMessage(`已删除“${preset.name}”`) }} className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><Trash2 className="h-4 w-4" /></button>
       </li>)}</ul> : <div className="rounded-xl border border-dashed border-border px-4 py-5 text-center text-xs leading-relaxed text-muted-foreground">还没有保存的预设。调好喜欢的声音，就把它留在这里。</div>}
     </section>
-    <details className="mt-6 rounded-xl bg-muted/30 px-4 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-3 font-medium">使用提示{ios ? '与 iOS 后台播放' : ''}</summary><div className="space-y-2 pb-3 leading-relaxed"><p>调整会自动保存在当前浏览器。关闭均衡器保留所有参数；恢复默认不会删除已保存的预设。</p><p>自动防削波会降低整体响度，无法保证所有音源和瞬态峰值都不失真。听到破音时，可进一步降低输出增益。</p>{ios && <p>iOS / iPadOS 可能在锁屏或后台暂停音效，回到应用后可点击播放恢复。关闭 EQ 会停止音效处理；如需恢复原生后台播放，请关闭 EQ 后刷新页面。</p>}</div></details>
+    <details className="mt-6 rounded-xl bg-muted/30 px-4 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-3 font-medium">使用提示{ios ? '与 iOS 后台播放' : ''}</summary><div className="space-y-2 pb-3 leading-relaxed"><p>调整会自动保存在当前浏览器。关闭均衡器保留所有参数；恢复默认不会删除已保存的预设。</p><p>自动防削波会降低整体响度，无法保证所有音源和瞬态峰值都不失真。听到破音时，可进一步降低输出增益。</p>{ios && <p>iOS / iPadOS 可能在锁屏或后台暂停音效，回到应用后可点击播放恢复。关闭均衡器会自动恢复原生播放通道并保留播放进度，切换时可能短暂缓冲。</p>}</div></details>
   </>
 }

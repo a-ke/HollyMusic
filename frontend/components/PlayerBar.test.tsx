@@ -1,4 +1,4 @@
-import { act, StrictMode } from 'react'
+import { act, StrictMode, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PlayerBar } from '@/components/player/PlayerBar'
@@ -7,6 +7,10 @@ import { toTrack } from '@/lib/types/player'
 import { useAuthStore } from '@/hooks/useAuth'
 import * as offlineAudio from '@/lib/offline-audio'
 import * as playbackResponse from '@/lib/playback-response'
+import { attachAnalysisPipeline, getExistingAnalysisPipeline } from '@/lib/client/audio-analysis'
+import { defaultEqualizer } from '@/lib/client/equalizer'
+import { useEqualizerStore } from '@/lib/store/equalizer-store'
+import { EqualizerPanel } from '@/components/player/EqualizerPanel'
 
 // 保留真实的 PC/手机按钮、进度条、store 和音频 hook，只隔离附属服务与音频硬件。
 vi.mock('@/hooks/useMediaSession', () => ({ useMediaSession: () => {} }))
@@ -21,6 +25,8 @@ class TestAudio extends EventTarget {
   preload = ''
   volume = 1
   muted = false
+  playbackRate = 1
+  defaultPlaybackRate = 1
   paused = true
   ended = false
   readyState = 0
@@ -76,6 +82,7 @@ beforeEach(async () => {
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
   hidden = true
   vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden)
+  useEqualizerStore.setState({ settings: defaultEqualizer(), saved: [], status: 'idle' })
   usePlayerStore.setState(usePlayerStore.getInitialState(), true)
   container = document.createElement('div')
   document.body.append(container)
@@ -88,6 +95,262 @@ beforeEach(async () => {
   window.dispatchEvent(new Event('click'))
   await act(async () => { await usePlayerStore.getState().playTrack(track, [track]) })
   await ready()
+})
+
+describe('iOS 关闭 EQ 恢复原生播放器', () => {
+  const param = () => ({ value: 0, cancelAndHoldAtTime() {}, setValueAtTime() {}, setTargetAtTime() {} })
+  const node = () => ({ gain: param(), frequency: param(), Q: param(), connect() {}, disconnect: vi.fn() })
+  class Context extends EventTarget {
+    state = 'running'
+    currentTime = 0
+    sampleRate = 48000
+    destination = node()
+    createAnalyser = node
+    createGain = node
+    createBiquadFilter = node
+    createMediaElementSource = vi.fn(node)
+    resume = vi.fn(async () => { this.state = 'running' })
+    close = vi.fn(async () => { this.state = 'closed' })
+  }
+
+  beforeEach(() => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('iPhone')
+    vi.stubGlobal('AudioContext', Context)
+    vi.stubGlobal('URL', class extends URL { static revokeObjectURL = vi.fn() })
+  })
+
+  async function enableEq() {
+    await act(async () => {
+      useEqualizerStore.getState().update({ enabled: true })
+      await attachAnalysisPipeline(audio as unknown as HTMLAudioElement)
+    })
+    const pipeline = getExistingAnalysisPipeline(audio as unknown as HTMLAudioElement)
+    expect(pipeline).not.toBeNull()
+    return pipeline!
+  }
+
+  it.each(['online', 'offline'])('%s 歌曲关闭 EQ 同步恢复原生通道，保留位置与输出设置', async mode => {
+    if (mode === 'offline') {
+      await act(async () => { usePlayerStore.setState({ streamUrl: 'blob:offline-track' }) })
+      await ready()
+    }
+    await act(async () => {
+      usePlayerStore.getState().seek(63)
+      usePlayerStore.setState({ volume: 0.45, isMuted: true })
+      useEqualizerStore.getState().selectPreset('rock')
+    })
+    audio.playbackRate = 1.25
+    const pipeline = await enableEq()
+    const original = audio
+    const src = original.src
+    const queue = usePlayerStore.getState().queue
+    const settings = useEqualizerStore.getState().settings
+    await act(async () => {
+      useEqualizerStore.getState().update({ enabled: false })
+      // 必须在关闭开关的同步手势内调用 play，不能依赖随后执行的 React effect。
+      expect(audio).not.toBe(original)
+      expect(audio.play).toHaveBeenCalledOnce()
+    })
+    expect(original.paused).toBe(true)
+    expect(original.src).toBe('')
+    expect(pipeline.context.close).toHaveBeenCalledOnce()
+    expect(getExistingAnalysisPipeline(original as unknown as HTMLAudioElement)).toBeNull()
+    expect(getExistingAnalysisPipeline(audio as unknown as HTMLAudioElement)).toBeNull()
+    expect(audio).toMatchObject({ src, volume: 0.45, muted: true, playbackRate: 1.25, paused: false })
+    // 新元素的初始 0:00 不应覆盖等待恢复的位置。
+    await act(async () => audio.dispatchEvent(new Event('timeupdate')))
+    expect(usePlayerStore.getState().currentTime).toBe(63)
+    await ready()
+    expect(audio.currentTime).toBe(63)
+    expect(audio.load).toHaveBeenCalledOnce()
+    expect(usePlayerStore.getState()).toMatchObject({ currentTrack: track, isPlaying: true, currentTime: 63 })
+    expect(usePlayerStore.getState().queue).toBe(queue)
+    expect(useEqualizerStore.getState().settings).toEqual({ ...settings, enabled: false })
+    expect(useEqualizerStore.getState().status).toBe('idle')
+    await act(async () => {
+      original.currentTime = 0
+      original.error = { code: 3 }
+      for (const event of ['timeupdate', 'pause', 'ended', 'error']) original.dispatchEvent(new Event(event))
+    })
+    expect(usePlayerStore.getState()).toMatchObject({ currentTrack: track, currentTime: 63, isPlaying: true })
+  })
+
+  it('暂停时关闭 EQ 保持暂停，随后可正常播放、拖动和切歌', async () => {
+    await enableEq()
+    await act(async () => {
+      usePlayerStore.getState().seek(75)
+      usePlayerStore.getState().setIsPlaying(false)
+    })
+    await act(async () => useEqualizerStore.getState().update({ enabled: false }))
+    await ready()
+    expect(audio.currentTime).toBe(75)
+    expect(audio.play).not.toHaveBeenCalled()
+    expect(audio.paused).toBe(true)
+    await click(container.querySelector('button[aria-label="播放"]'))
+    await act(async () => usePlayerStore.getState().seek(90))
+    expect(audio).toMatchObject({ paused: false, currentTime: 90 })
+    await act(async () => usePlayerStore.getState().playTrack(second, [track, second]))
+    await ready()
+    expect(audio.src).toContain('kw-second')
+    expect(audio).toMatchObject({ paused: false, currentTime: 0 })
+  })
+
+  it('加载元数据前关闭 EQ 保留待恢复位置，并尊重随后暂停与拖动', async () => {
+    await enableEq()
+    await act(async () => {
+      usePlayerStore.getState().seek(92)
+      usePlayerStore.getState().setQuality('128k')
+    })
+    expect(audio.readyState).toBe(0)
+    await act(async () => useEqualizerStore.getState().update({ enabled: false }))
+    expect(audio.src).toContain('quality=128k')
+    await act(async () => {
+      usePlayerStore.getState().seek(110)
+      usePlayerStore.getState().setIsPlaying(false)
+    })
+    await ready()
+    expect(audio).toMatchObject({ currentTime: 110, paused: true })
+    expect(usePlayerStore.getState()).toMatchObject({ currentTime: 110, isPlaying: false })
+  })
+
+  it('切音质淡出期间关闭 EQ，待执行的加载使用新元素和新音源', async () => {
+    await enableEq()
+    await act(async () => usePlayerStore.getState().seek(48))
+    hidden = false
+    const original = audio
+    await act(async () => usePlayerStore.getState().setQuality('128k'))
+    expect(original.src).not.toContain('quality=128k')
+    await act(async () => useEqualizerStore.getState().update({ enabled: false }))
+    expect(audio).not.toBe(original)
+    expect(audio.src).toContain('quality=128k')
+    expect(original.src).toBe('')
+    await ready()
+    expect(audio.currentTime).toBe(48)
+    await act(async () => { hidden = true; document.dispatchEvent(new Event('visibilitychange')) })
+    expect(audio.volume).toBe(0.8)
+  })
+
+  it.each(['resolve', 'reject'])('旧 play Promise %s 不会影响替换后已暂停的播放器', async result => {
+    await enableEq()
+    await act(async () => usePlayerStore.getState().setIsPlaying(false))
+    const original = audio
+    let finish!: () => void
+    original.play.mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      finish = () => result === 'resolve' ? resolve() : reject(new Error('old playback failed'))
+    }))
+    await act(async () => usePlayerStore.getState().setIsPlaying(true))
+    await act(async () => useEqualizerStore.getState().update({ enabled: false }))
+    await ready()
+    await act(async () => usePlayerStore.getState().setIsPlaying(false))
+    const volume = audio.volume
+    await act(async () => finish())
+    expect(audio).toMatchObject({ paused: true, volume })
+    expect(usePlayerStore.getState()).toMatchObject({ isPlaying: false, currentTrack: track, urlFetchError: null })
+  })
+
+  it('替换后等待 play 完成时点击暂停，不会被迟到的播放结果重新拉起', async () => {
+    await enableEq()
+    let finish!: () => void
+    class DeferredAudio extends TestAudio {
+      play = vi.fn(() => new Promise<void>(resolve => {
+        finish = () => { this.paused = false; resolve() }
+      }))
+    }
+    vi.stubGlobal('Audio', DeferredAudio)
+    await act(async () => useEqualizerStore.getState().update({ enabled: false }))
+    await act(async () => usePlayerStore.getState().setIsPlaying(false))
+    await act(async () => finish())
+    await ready()
+    expect(audio.paused).toBe(true)
+    expect(usePlayerStore.getState().isPlaying).toBe(false)
+  })
+
+  it('关闭 EQ 后立刻切歌，新歌不会继承旧曲待恢复的进度', async () => {
+    await enableEq()
+    await act(async () => usePlayerStore.getState().seek(92))
+    await act(async () => {
+      useEqualizerStore.getState().update({ enabled: false })
+      await usePlayerStore.getState().playTrack(second, [track, second])
+    })
+    await ready()
+    expect(audio.src).toContain('kw-second')
+    expect(audio.currentTime).toBe(0)
+    expect(usePlayerStore.getState()).toMatchObject({ currentTrack: second, currentTime: 0, isPlaying: true })
+  })
+
+  it('通过真实声音设置开关替换元素后，面板接收新元素并可再次启用 EQ', async () => {
+    function PlayerWithEqualizer() {
+      const [element, setElement] = useState<HTMLAudioElement | null>(null)
+      return <><PlayerBar audio={element} onAudioElement={next => {
+        setElement(next)
+        if (next) audio = next as unknown as TestAudio
+      }} /><EqualizerPanel audio={element} /></>
+    }
+    await act(async () => root.render(<PlayerWithEqualizer />))
+    await ready()
+    await act(async () => usePlayerStore.getState().seek(52))
+    const checkbox = container.querySelector<HTMLInputElement>('input[role="switch"]')!
+    for (let i = 0; i < 2; i++) {
+      await act(async () => checkbox.click())
+      expect(checkbox.checked).toBe(true)
+      const original = audio
+      expect(getExistingAnalysisPipeline(original as unknown as HTMLAudioElement)).not.toBeNull()
+      await act(async () => checkbox.click())
+      expect(checkbox.checked).toBe(false)
+      expect(audio).not.toBe(original)
+      expect(getExistingAnalysisPipeline(audio as unknown as HTMLAudioElement)).toBeNull()
+      await ready()
+      expect(audio.currentTime).toBe(52)
+      expect(audio.load).toHaveBeenCalledOnce()
+    }
+  })
+
+  it('反复开关 EQ 释放每条旧链路，关闭后手势不会重新接管', async () => {
+    for (let i = 0; i < 3; i++) {
+      const pipeline = await enableEq()
+      const original = audio
+      await act(async () => useEqualizerStore.getState().update({ enabled: false }))
+      await ready()
+      expect(audio).not.toBe(original)
+      expect(pipeline.context.close).toHaveBeenCalledOnce()
+      await act(async () => window.dispatchEvent(new Event('click')))
+      expect(getExistingAnalysisPipeline(audio as unknown as HTMLAudioElement)).toBeNull()
+      expect(audio.load).toHaveBeenCalledOnce()
+    }
+  })
+
+  it('iPadOS 桌面 UA 关闭 EQ 也恢复原生通道', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Macintosh')
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, get: () => 5 })
+    try {
+      await enableEq()
+      const original = audio
+      await act(async () => useEqualizerStore.getState().update({ enabled: false }))
+      expect(audio).not.toBe(original)
+      expect(getExistingAnalysisPipeline(audio as unknown as HTMLAudioElement)).toBeNull()
+    } finally { delete (navigator as { maxTouchPoints?: number }).maxTouchPoints }
+  })
+
+  it('桌面关闭 EQ 继续复用现有播放器和频谱链路', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Desktop')
+    const pipeline = await enableEq()
+    const original = audio
+    await act(async () => useEqualizerStore.getState().update({ enabled: false }))
+    expect(audio).toBe(original)
+    expect(getExistingAnalysisPipeline(audio as unknown as HTMLAudioElement)).toBe(pipeline)
+    expect(pipeline.context.close).not.toHaveBeenCalled()
+  })
+
+  it('尚未接管音频时关闭 EQ 不重建播放器', async () => {
+    const original = audio
+    await act(async () => {
+      useEqualizerStore.getState().update({ enabled: true })
+      useEqualizerStore.getState().update({ enabled: false })
+    })
+    expect(audio).toBe(original)
+    expect(audio.paused).toBe(false)
+  })
 })
 
 afterEach(async () => {
