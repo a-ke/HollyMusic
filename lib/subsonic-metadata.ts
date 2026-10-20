@@ -14,7 +14,6 @@ import type { MusicInfo } from './types/music'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getPic: getPicNative } = require('./music-core/music-pic')
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function handleCoverArtAsync(request: NextRequest, authRes: AuthResult): Promise<Response> {
   try {
     // 获取请求中的 id 参数
@@ -26,9 +25,13 @@ export async function handleCoverArtAsync(request: NextRequest, authRes: AuthRes
       return serveDefaultCoverArt(request)
     }
 
+    // Musiver 等客户端会追加 al- 前缀；必须先还原，再判断封面类型，
+    // 否则 al-pl-{id} 会被误当成 source=pl 的歌曲，导致列表显示默认图。
+    const coverId = id.startsWith('al-') ? id.slice(3) : id
+
     // 歌单封面仅在 Subsonic 的 getCoverArt 中解析。网页端继续直接走 /api/cover。
-    if (id.startsWith('pl-')) {
-      return servePlaylistCoverArt(request, authRes, id)
+    if (coverId.startsWith('pl-')) {
+      return servePlaylistCoverArt(request, authRes, coverId)
     }
 
     // 封面 id 统一为 source-{songmid}；Musiver 会给封面 id 拼 al- 前缀，去掉后按歌曲查。
@@ -36,10 +39,9 @@ export async function handleCoverArtAsync(request: NextRequest, authRes: AuthRes
     let musicInfo = null
 
     try {
-      if (id.startsWith('ar-')) {
+      if (coverId.startsWith('ar-')) {
         return serveDefaultCoverArt(request)
       }
-      const coverId = id.startsWith('al-') ? id.slice(3) : id
       musicInfo = await dbAPI.resolveMusicInfoById(coverId)
       if (!musicInfo) return serveDefaultCoverArt(request)
     } catch (err) {
@@ -121,7 +123,8 @@ function serveDefaultCoverArt(request: NextRequest): Response {
       headers: {
         'Content-Type': 'image/png',
         'Content-Length': String(buffer.length),
-        'Cache-Control': 'public, max-age=86400'
+        // 临时获取失败不能把 404 占位图缓存一天，后续请求应允许重试。
+        'Cache-Control': 'no-store'
       }
     })
   } catch (err) {
