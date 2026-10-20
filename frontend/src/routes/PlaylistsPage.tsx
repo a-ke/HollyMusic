@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { FileUp, ListMusic, Plus, Sparkles } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { PlaylistSummary } from '@/lib/api/playlists'
 import { useAuthStore } from '@/hooks/useAuth'
 import { usePlaylists } from '@/hooks/usePlaylists'
@@ -11,6 +11,7 @@ import { DeletePlaylistDialog } from '@@/components/playlists/DeletePlaylistDial
 import { EditPlaylistDialog } from '@@/components/playlists/EditPlaylistDialog'
 import { PlaylistGrid } from '@@/components/playlists/PlaylistGrid'
 import { ImportPlaylistDialog } from '@@/components/playlists/ImportPlaylistDialog'
+import { FavoritePlaylists } from '@@/components/playlists/FavoritePlaylists'
 
 export function PlaylistsPage() {
   const { playlists, loading, create, rename, remove } = usePlaylists()
@@ -20,6 +21,8 @@ export function PlaylistsPage() {
   const [editingPlaylist, setEditingPlaylist] = useState<PlaylistSummary | null>(null)
   const [deletingPlaylist, setDeletingPlaylist] = useState<PlaylistSummary | null>(null)
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const showFavorites = searchParams.get('tab') === 'favorites'
 
   const handleRename = async (name: string) => {
     if (!editingPlaylist) return
@@ -70,19 +73,37 @@ export function PlaylistsPage() {
         </div>
       </div>
 
-      {!loading && playlists.length > 0 && <p className="mb-3 text-xs text-muted-foreground">共 {playlists.length} 个歌单</p>}
+      <div className="mb-5 flex gap-2" role="group" aria-label="歌单分类">
+        {[{ value: 'created', label: '本地歌单' }, { value: 'favorites', label: '收藏的歌单' }].map(tab => (
+          <button key={tab.value} type="button" aria-pressed={showFavorites === (tab.value === 'favorites')}
+            onClick={() => setSearchParams(previous => {
+              const next = new URLSearchParams(previous)
+              if (tab.value === 'favorites') next.set('tab', 'favorites')
+              else next.delete('tab')
+              return next
+            })}
+            className={`rounded-full px-4 py-2 text-sm transition ${showFavorites === (tab.value === 'favorites') ? 'bg-primary/15 font-medium text-primary' : 'text-muted-foreground hover:bg-accent'}`}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-      {loading ? (
-        <LoadingSkeleton count={4} />
-      ) : playlists.length > 0 ? (
-        <PlaylistGrid
-          playlists={playlists}
-          currentUsername={currentUsername}
-          onEdit={setEditingPlaylist}
-          onDelete={setDeletingPlaylist}
-        />
-      ) : (
-        <EmptyState icon={ListMusic} title="还没有歌单" description="新建一个歌单开始整理" />
+      {showFavorites ? <FavoritePlaylists /> : (
+        <>
+          {!loading && playlists.length > 0 && <p className="mb-3 text-xs text-muted-foreground">共 {playlists.length} 个歌单</p>}
+          {loading ? (
+            <LoadingSkeleton count={4} />
+          ) : playlists.length > 0 ? (
+            <PlaylistGrid
+              playlists={playlists}
+              currentUsername={currentUsername}
+              onEdit={setEditingPlaylist}
+              onDelete={setDeletingPlaylist}
+            />
+          ) : (
+            <EmptyState icon={ListMusic} title="还没有歌单" description="新建一个歌单开始整理" />
+          )}
+        </>
       )}
 
       {showCreate && (
@@ -91,6 +112,7 @@ export function PlaylistsPage() {
           onCreate={async name => {
             await create(name)
             setShowCreate(false)
+            setSearchParams({})
           }}
         />
       )}

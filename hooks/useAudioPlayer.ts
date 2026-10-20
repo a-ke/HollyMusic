@@ -7,7 +7,7 @@
  *    —— Howler 的 seek 内部走 internal play 不触发 onplay，导致 rAF 循环永不启动
  * 2. 原生 `seeked` 事件保证 seek 到未缓冲区→缓冲→恢复后进度条自然更新
  * 3. 缓冲态用原生 `waiting`/`canplay` 事件，比 Howler 更准确
- * 4. 单个 Audio 元素复用（load 时改 src + load），避免反复创建/销毁
+ * 4. 切歌复用 Audio 元素；iOS 关闭 EQ 时替换元素，恢复原生输出
  * 5. generation 计数防快速切歌竞态
  *
  * 音频 URL 指向 /api/audio，服务端磁盘缓存 + Range 代理；
@@ -18,11 +18,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { logger } from '@/lib/logger'
-import { bindEqualizerLifecycle } from '@/lib/client/audio-analysis'
+import { bindEqualizerLifecycle, getExistingAnalysisPipeline, isAppleMobile } from '@/lib/client/audio-analysis'
+import { useEqualizerStore } from '@/lib/store/equalizer-store'
 
 interface UseAudioPlayerOptions {
   /** 音频元素创建/销毁通知，供频谱等附属能力接入同一播放实例。 */
-  onAudioElement?: (audio: HTMLAudioElement | null) => void
+  onAudioElement?: (audio: HTMLAudioElement | null, reason: 'init' | 'replace' | 'dispose') => void
   onTimeUpdate?: (t: number) => void
   onDuration?: (d: number) => void
   onPlayState?: (playing: boolean) => void
@@ -108,19 +109,19 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
   }, [cancelVolumeFade])
 
   // ------------------------------------------------------------------
-  // 初始化：创建单个 Audio 元素 + 绑定原生事件（仅一次）
+  // 初始化播放器；iOS 关闭 EQ 时在同一生命周期内更换音频元素。
   // ------------------------------------------------------------------
   useEffect(() => {
     if (typeof window === 'undefined') return
 
-    const audio = new Audio()
+    let audio = new Audio()
     // 频谱通过 MediaElementAudioSourceNode 读取该元素；必须在设置 src 前声明 CORS 模式。
     // 正常 /api/audio 同源请求不受影响，部分 Android 内核会据此决定是否向 Web Audio 暴露样本数据。
     audio.crossOrigin = 'anonymous'
     audio.preload = 'auto'
-    const cleanupEqualizer = bindEqualizerLifecycle(audio)
+    let cleanupEqualizer = bindEqualizerLifecycle(audio)
     audioRef.current = audio
-    optsRef.current.onAudioElement?.(audio)
+    optsRef.current.onAudioElement?.(audio, 'init')
 
     // iOS autoplay 解锁：首次用户交互时触发一次 load，解除 play() 限制
     const unlock = () => {
@@ -258,33 +259,80 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
       optsRef.current.onError?.(msg, err?.code, wasPlaying)
     }
 
-    audio.addEventListener('loadedmetadata', onLoadedMetadata)
-    audio.addEventListener('canplay', onCanPlay)
-    audio.addEventListener('play', onPlay)
-    audio.addEventListener('playing', onPlaying)
-    audio.addEventListener('pause', onPause)
-    audio.addEventListener('ended', onEnded)
-    audio.addEventListener('timeupdate', onTimeUpdate)
-    audio.addEventListener('seeked', onSeeked)
-    audio.addEventListener('waiting', onWaiting)
-    audio.addEventListener('durationchange', onDurationChange)
-    audio.addEventListener('error', onError)
+    const mediaEvents = {
+      loadedmetadata: onLoadedMetadata, canplay: onCanPlay, play: onPlay, playing: onPlaying,
+      pause: onPause, ended: onEnded, timeupdate: onTimeUpdate, seeked: onSeeked,
+      waiting: onWaiting, durationchange: onDurationChange, error: onError,
+    }
+    const bindMediaEvents = (element: HTMLAudioElement) => {
+      for (const [event, listener] of Object.entries(mediaEvents)) element.addEventListener(event, listener)
+      return () => {
+        for (const [event, listener] of Object.entries(mediaEvents)) element.removeEventListener(event, listener)
+      }
+    }
+    let removeMediaEvents = bindMediaEvents(audio)
+
+    const unsubscribeEqualizer = useEqualizerStore.subscribe((state, previous) => {
+      if (!previous.settings.enabled || state.settings.enabled || !isAppleMobile()
+        || !getExistingAnalysisPipeline(audio)) return
+
+      // MediaElementSource 无法从原元素撤销。关闭 EQ 必须更换元素，才能真正退出
+      // Web Audio；在 store 的同步通知中完成，让 play() 保留关闭开关的用户手势。
+      const oldAudio = audio
+      const { src, muted, playbackRate } = oldAudio
+      const generation = loadGenRef.current
+      // load() 淡出期间正在等待设置新 src，应让该命令接管新元素，不重播旧曲。
+      const restoreSource = activeGenRef.current === generation && generation > 0 && !!src
+      const position = pendingSeekRef.current ?? oldAudio.currentTime
+      const shouldPlay = playbackIntentRef.current === 'playing' && !oldAudio.ended
+      cancelVolumeFade()
+      stopProgress()
+      removeMediaEvents()
+      cleanupEqualizer()
+      oldAudio.pause()
+      oldAudio.removeAttribute('src')
+      oldAudio.load()
+
+      audio = new Audio()
+      audio.crossOrigin = 'anonymous'
+      audio.preload = 'auto'
+      audio.volume = targetVolumeRef.current
+      audio.muted = muted
+      audio.defaultPlaybackRate = playbackRate
+      audio.playbackRate = playbackRate
+      audioRef.current = audio
+      cleanupEqualizer = bindEqualizerLifecycle(audio)
+      removeMediaEvents = bindMediaEvents(audio)
+      seekingRef.current = false
+      setIsReady(false)
+      optsRef.current.onAudioElement?.(audio, 'replace')
+      useEqualizerStore.setState({ status: 'idle' })
+
+      if (!restoreSource) return
+      pendingSeekRef.current = Number.isFinite(position) && position > 0 ? position : null
+      audio.src = src
+      audio.load()
+      if (!shouldPlay) return
+
+      const replacement = audio
+      void replacement.play().then(() => {
+        if (audioRef.current !== replacement || loadGenRef.current !== generation) return
+        if (playbackIntentRef.current !== 'playing') replacement.pause()
+      }).catch(error => {
+        if (audioRef.current !== replacement || loadGenRef.current !== generation
+          || playbackIntentRef.current !== 'playing') return
+        if (error instanceof Error && error.name === 'AbortError') return
+        logger.warn('[useAudioPlayer] 恢复原生播放失败', error)
+        optsRef.current.onPlayState?.(false)
+      })
+    })
 
     return () => {
+      unsubscribeEqualizer()
       window.removeEventListener('touchstart', unlock)
       window.removeEventListener('click', unlock)
       document.removeEventListener('visibilitychange', onVisibilityChange)
-      audio.removeEventListener('loadedmetadata', onLoadedMetadata)
-      audio.removeEventListener('canplay', onCanPlay)
-      audio.removeEventListener('play', onPlay)
-      audio.removeEventListener('playing', onPlaying)
-      audio.removeEventListener('pause', onPause)
-      audio.removeEventListener('ended', onEnded)
-      audio.removeEventListener('timeupdate', onTimeUpdate)
-      audio.removeEventListener('seeked', onSeeked)
-      audio.removeEventListener('waiting', onWaiting)
-      audio.removeEventListener('durationchange', onDurationChange)
-      audio.removeEventListener('error', onError)
+      removeMediaEvents()
       if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
       cancelVolumeFade()
       audio.pause()
@@ -292,7 +340,7 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
       audio.load()
       cleanupEqualizer()
       audioRef.current = null
-      optsRef.current.onAudioElement?.(null)
+      optsRef.current.onAudioElement?.(null, 'dispose')
     }
   }, [cancelVolumeFade])
 
@@ -331,7 +379,7 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
   // ------------------------------------------------------------------
   const load = useCallback(
     async (url: string, autoplay = false, startTime = 0) => {
-      const audio = audioRef.current
+      let audio = audioRef.current
       if (!audio) return
 
       // generation 计数：快速切歌时放弃过期的事件回调
@@ -355,6 +403,10 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
       }
       if (gen !== loadGenRef.current) return
 
+      // 淡出等待期间关闭 EQ 会更换元素；这次 load 仍需在新元素上完成。
+      audio = audioRef.current
+      if (!audio) return
+
       // 设置新源
       activeGenRef.current = gen
       audio.pause()
@@ -369,6 +421,7 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
           playbackIntentRef.current = 'playing'
           audio.volume = 0
           await audio.play()
+          if (audioRef.current !== audio) return
           if (gen !== loadGenRef.current) {
             // 已有更新的 load 接管音量；本代不得触碰，否则会打断新歌的淡入。
             if (audioRef.current === audio) audio.volume = targetVolumeRef.current
@@ -376,6 +429,7 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
           }
           void fadeVolume(targetVolumeRef.current, 420)
         } catch (e) {
+          if (audioRef.current !== audio) return
           // AbortError：play() 被 pause()/load() 打断（快速切歌），浏览器标准行为，忽略
           // gen 校验：过期 load（快速连切）的 play 结果不影响当前歌曲状态，避免状态闪变
           const name = e instanceof Error ? e.name : ''
@@ -417,6 +471,7 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
   const play = useCallback(async () => {
     const audio = audioRef.current
     if (!audio) return
+    const generation = loadGenRef.current
     playbackIntentRef.current = 'playing'
     // 暂停淡出尚未结束时再次播放：取消淡出并平滑恢复，无需重新 play()。
     if (!audio.paused) {
@@ -426,8 +481,11 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
     try {
       audio.volume = 0
       await audio.play()
+      if (audioRef.current !== audio || loadGenRef.current !== generation) return
+      if (playbackIntentRef.current !== 'playing') { audio.pause(); return }
       void fadeVolume(targetVolumeRef.current, 420)
     } catch (e) {
+      if (audioRef.current !== audio || loadGenRef.current !== generation) return
       // AbortError：play() promise 未决期间被 pause()/load()/切歌打断，
       // 是浏览器标准行为，不算播放失败——否则会触发自动跳歌甚至停播
       if (e instanceof Error && e.name === 'AbortError') return

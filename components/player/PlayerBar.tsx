@@ -53,9 +53,10 @@ export function PlayerBar({ audio, onAudioElement, onOpenEqualizer }: PlayerBarP
   }, [streamUrl])
 
   const { isReady, load, unload, play, pause, seek, setVolume, setMuted } = useAudioPlayer({
-    onAudioElement: element => {
+    onAudioElement: (element, reason) => {
       // StrictMode 的 effect 重建会创建新 Audio，不能沿用旧元素的加载记录。
-      loadedRef.current = null
+      // 关闭 EQ 的替换由 hook 迁移当前音源，保留记录以免重复 load 或取消缓存。
+      if (reason !== 'replace') loadedRef.current = null
       onAudioElement(element)
     },
     onTimeUpdate: t => {

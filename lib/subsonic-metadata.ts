@@ -8,13 +8,13 @@ import * as dbAPI from './db'
 import { logger } from './logger'
 import { fetchLyricForMusic } from './services/lyrics'
 import { getPlaylistCoverForUser } from './services/playlist-service'
+import { getSubsonicFavoritePlaylist, isFavoritePlaylistId, loadFavoritePlaylistDetail } from './subsonic-playlist-favorites'
 import type { MusicInfo } from './types/music'
 
 // 原生封面获取模块（参考 lx-music 各源 pic 实现），替代黑盒脚本与第三方聚合 API
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getPic: getPicNative } = require('./music-core/music-pic')
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function handleCoverArtAsync(request: NextRequest, authRes: AuthResult): Promise<Response> {
   try {
     // 获取请求中的 id 参数
@@ -26,9 +26,13 @@ export async function handleCoverArtAsync(request: NextRequest, authRes: AuthRes
       return serveDefaultCoverArt(request)
     }
 
+    // Musiver 等客户端会追加 al- 前缀；必须先还原，再判断封面类型，
+    // 否则 al-pl-{id} 会被误当成 source=pl 的歌曲，导致列表显示默认图。
+    const coverId = id.startsWith('al-') ? id.slice(3) : id
+
     // 歌单封面仅在 Subsonic 的 getCoverArt 中解析。网页端继续直接走 /api/cover。
-    if (id.startsWith('pl-')) {
-      return servePlaylistCoverArt(request, authRes, id)
+    if (coverId.startsWith('pl-')) {
+      return servePlaylistCoverArt(request, authRes, coverId)
     }
 
     // 封面 id 统一为 source-{songmid}；Musiver 会给封面 id 拼 al- 前缀，去掉后按歌曲查。
@@ -36,10 +40,9 @@ export async function handleCoverArtAsync(request: NextRequest, authRes: AuthRes
     let musicInfo = null
 
     try {
-      if (id.startsWith('ar-')) {
+      if (coverId.startsWith('ar-')) {
         return serveDefaultCoverArt(request)
       }
-      const coverId = id.startsWith('al-') ? id.slice(3) : id
       musicInfo = await dbAPI.resolveMusicInfoById(coverId)
       if (!musicInfo) return serveDefaultCoverArt(request)
     } catch (err) {
@@ -69,6 +72,8 @@ export async function handleCoverArtAsync(request: NextRequest, authRes: AuthRes
 
 /** `pl-{id}` 是 Subsonic 歌单封面标识，回退到第一首歌的封面。 */
 async function servePlaylistCoverArt(request: NextRequest, authRes: AuthResult, coverId: string): Promise<Response> {
+  const id = coverId.slice(3)
+  if (isFavoritePlaylistId(id)) return serveFavoritePlaylistCoverArt(request, authRes, id)
   const playlistId = Number(coverId.slice(3))
   if (!Number.isSafeInteger(playlistId) || playlistId <= 0) return serveDefaultCoverArt(request)
 
@@ -99,6 +104,36 @@ async function servePlaylistCoverArt(request: NextRequest, authRes: AuthResult, 
   }
 }
 
+async function serveFavoritePlaylistCoverArt(request: NextRequest, authRes: AuthResult, id: string): Promise<Response> {
+  try {
+    const playlist = await getSubsonicFavoritePlaylist(id, authRes)
+    if (!playlist) return serveDefaultCoverArt(request)
+
+    const fetchCover = async (url: string | null | undefined): Promise<Response | null> => {
+      if (!url || !isHttpUrl(url)) return null
+      const response = await fetchImageFromUrl(url)
+      // 收藏属于个人资料，不能让共享缓存绕过账号权限。
+      if (response) response.headers.set('Cache-Control', 'private, max-age=300')
+      return response
+    }
+    const snapshotCover = await fetchCover(playlist.cover)
+    if (snapshotCover) return snapshotCover
+
+    // 快照地址过期时，再复用发现页详情取得最新封面或首曲封面。
+    const detail = await loadFavoritePlaylistDetail(playlist)
+    const liveCover = detail?.cover !== playlist.cover ? await fetchCover(detail?.cover) : null
+    if (liveCover) return liveCover
+    const firstTrack = detail?.tracks[0]
+    if (firstTrack) {
+      const trackCover = await fetchCover(await getPicNative(firstTrack))
+      if (trackCover) return trackCover
+    }
+  } catch (err) {
+    logger.warn('[getCoverArt] Failed to resolve platform favorite cover:', err)
+  }
+  return serveDefaultCoverArt(request)
+}
+
 function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value)
@@ -121,7 +156,8 @@ function serveDefaultCoverArt(request: NextRequest): Response {
       headers: {
         'Content-Type': 'image/png',
         'Content-Length': String(buffer.length),
-        'Cache-Control': 'public, max-age=86400'
+        // 临时获取失败不能把 404 占位图缓存一天，后续请求应允许重试。
+        'Cache-Control': 'no-store'
       }
     })
   } catch (err) {
