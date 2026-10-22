@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom'
-import { Menu, Music2 } from 'lucide-react'
+import { Menu } from 'lucide-react'
 import { useSiteSettingsStore } from '@/lib/store/site-settings-store'
+import { HollyBrand } from '@/components/brand/HollyLogo'
 import { AppearanceButton } from './AppearanceSettings'
 import { getPageName } from './SiteMetadata'
 
@@ -18,10 +19,7 @@ export function MobileHeader({ onMenuClick }: { onMenuClick: () => void }) {
       >
         <Menu className="h-5 w-5" />
       </button>
-      <div className="flex min-w-0 items-center gap-2">
-        <Music2 className="h-5 w-5 shrink-0 text-primary" />
-        <span className="truncate text-base font-semibold">{title}</span>
-      </div>
+      <HollyBrand name={title} compact />
       <AppearanceButton compact className="ml-auto shrink-0" />
     </header>
   )

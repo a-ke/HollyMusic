@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
-import { Music2, Heart, ListMusic, Headphones } from 'lucide-react'
+import { Heart, ListMusic, Headphones } from 'lucide-react'
 import { useSiteSettingsStore } from '@/lib/store/site-settings-store'
+import { HollyBrand, HollyMark } from '@/components/brand/HollyLogo'
 import { ProjectAttribution } from '@/components/shared/ProjectAttribution'
 import { AppearanceButton } from './AppearanceSettings'
 
@@ -15,14 +16,14 @@ export function AuthLayout({ title, description, footer, children }: {
   return (
     <div className="app-atmosphere login-page safe-form-page flex min-h-dvh flex-col px-5 py-5 sm:px-10 sm:py-7">
       <header className="mx-auto flex w-full max-w-6xl items-center justify-between">
-        <div className="flex min-w-0 items-center gap-2.5"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground"><Music2 className="h-5 w-5" /></span><span className="truncate text-base font-bold tracking-tight" title={settings.name}>{settings.name}</span></div>
+        <HollyBrand name={settings.name} />
         <AppearanceButton compact />
       </header>
       <main className="mx-auto grid w-full max-w-5xl flex-1 items-center gap-10 py-9 md:grid-cols-[1.1fr_1fr] md:gap-14 md:py-12">
         <section className="hidden min-w-0 md:block">
           <div className="login-record-scene" aria-hidden="true">
-            <div className="login-record"><span className="login-record-label"><Music2 className="h-9 w-9" /></span></div>
-            <div className="login-sleeve"><Music2 className="h-7 w-7 opacity-70" /><span className="text-xs font-medium tracking-[0.25em]">HOLLY<br />COLLECTION</span><div className="login-wave">{[18, 32, 52, 36, 68, 45, 60, 28, 42, 20].map((height, i) => <span key={i} style={{ height }} />)}</div></div>
+            <div className="login-record"><span className="login-record-label"><HollyMark className="h-9 w-9" /></span></div>
+            <div className="login-sleeve"><HollyMark className="h-7 w-7 opacity-70" /><span className="text-xs font-medium tracking-[0.25em]">HOLLY<br />COLLECTION</span><div className="login-wave">{[18, 32, 52, 36, 68, 45, 60, 28, 42, 20].map((height, i) => <span key={i} style={{ height }} />)}</div></div>
           </div>
           <p className="mb-4 text-xs font-medium tracking-[0.22em] text-primary">属于你的音乐时光</p>
           <h2 className="text-4xl font-semibold leading-[1.4] tracking-tight lg:text-5xl">让喜欢的音乐，<br />一直在身边。</h2>

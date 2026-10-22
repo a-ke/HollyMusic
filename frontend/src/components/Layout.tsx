@@ -6,6 +6,7 @@ import { usePwaInstall } from '@/hooks/usePwaInstall'
 import { isOfflineStorageAvailable } from '@/lib/offline-audio'
 import { useSiteSettingsStore } from '@/lib/store/site-settings-store'
 import { ModalMask } from '@/components/shared/ModalMask'
+import { HollyBrand } from '@/components/brand/HollyLogo'
 import { AppearanceButton } from './AppearanceSettings'
 
 const nav = [
@@ -119,10 +120,7 @@ function SidebarContent({ onNavigate, onAbout }: ContentProps) {
 
   return (
     <>
-      <div className="mb-6 flex min-w-0 shrink-0 items-center gap-2.5 px-2 py-4">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm"><Music2 className="h-5 w-5" /></span>
-        <span className="truncate text-base font-bold tracking-tight" title={siteName}>{siteName}</span>
-      </div>
+      <HollyBrand name={siteName} className="mb-6 shrink-0 px-2 py-4" />
       <nav className="flex shrink-0 flex-col gap-1">
         {nav.filter(item => item.href !== '/offline' || canCacheSongs).map(item => (
           <div key={item.href}>
