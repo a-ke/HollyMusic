@@ -18,9 +18,7 @@ music-core/
 ├── music-search.js            # Music search API implementation
 ├── weapi.js                   # WeAPI encryption/signing
 ├── wy-eapi.js                 # NetEase EAPI wrapper
-├── wy-eapi-request.js         # EAPI request handler
-├── request.js                 # HTTP request wrapper
-└── utils.js                   # Utility functions
+└── request.js                 # HTTP request wrapper
 ```
 
 ## WHERE TO LOOK

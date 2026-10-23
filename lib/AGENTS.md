@@ -10,7 +10,6 @@ lib/
 ├── cache-manager.ts            # In-memory caching with TTL
 ├── db.ts                      # Prisma wrapper + checksum-based upsert
 ├── auth.ts                    # Authentication logic
-├── download-manager.ts        # Download queue management
 ├── config-sync.ts             # Config file synchronization
 ├── config-validator.ts        # Config validation
 ├── music-core/                # Music source engine (NetEase API wrapper)
