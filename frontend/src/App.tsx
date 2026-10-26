@@ -232,7 +232,9 @@ export function App() {
         <MobileSidebar open={drawerOpen} onClose={() => setDrawerOpen(false)} onAbout={() => setAboutOpen(true)} />
         <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
         <QueuePanel />
-        <LyricsPanel audio={audioElement} />
+        <LyricsPanel audio={audioElement} onOpenEqualizer={() => {
+          void navigate('/equalizer', { state: { equalizerEntry: true } })
+        }} />
         <SongContextMenu />
         <ToastContainer />
       </div>

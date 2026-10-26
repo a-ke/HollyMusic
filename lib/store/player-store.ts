@@ -69,6 +69,9 @@ interface PlayerStore {
   playbackMode: PlaybackMode
   /** 当前播放音质（持久化到 localStorage） */
   quality: QualityType
+  keepScreenAwake: boolean
+  /** 系统实际授权状态；不持久化。 */
+  wakeLockStatus: 'idle' | 'active' | 'released' | 'unsupported' | 'error'
   /** 当前歌曲实际播放音质（loadStreamUrl 时由 resolveQuality 算出，不持久化；无曲目时 null） */
   effectiveQuality: QualityType | null
   /** 浏览器原生解码能力上限（启动 canPlayType 探测得出）。
@@ -105,6 +108,7 @@ interface PlayerStore {
   toggleMute: () => void
   cyclePlaybackMode: () => void
   setQuality: (q: QualityType) => void
+  setKeepScreenAwake: (enabled: boolean) => void
 
   next: () => void
   previous: () => void
@@ -147,6 +151,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   currentTime: 0,
   duration: 0,
   ...loadPlayerPreferences(),
+  wakeLockStatus: 'idle',
   effectiveQuality: null,
   codecCap: detectCodecCap(),
   bufferProgress: null,
@@ -338,6 +343,7 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   seek: (t) => set(s => ({ currentTime: t, seekTarget: t, seekNonce: s.seekNonce + 1 })),
   setVolume: (v) => { if (Number.isFinite(v)) set({ volume: Math.max(0, Math.min(1, v)), isMuted: false }) },
   toggleMute: () => set(s => ({ isMuted: !s.isMuted })),
+  setKeepScreenAwake: enabled => set({ keepScreenAwake: enabled }),
   cyclePlaybackMode: () =>
     set(s => {
       const modes: PlaybackMode[] = ['sequence', 'loop', 'random']
@@ -515,7 +521,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
 // 高频播放进度不触发偏好写入；字段白名单也避免把瞬时状态持久化。
 usePlayerStore.subscribe((state, previous) => {
   if (state.volume === previous.volume && state.isMuted === previous.isMuted
-    && state.playbackMode === previous.playbackMode && state.quality === previous.quality) return
-  const { volume, isMuted, playbackMode, quality } = state
-  playerPreferencesStorage.write({ volume, isMuted, playbackMode, quality })
+    && state.playbackMode === previous.playbackMode && state.quality === previous.quality
+    && state.keepScreenAwake === previous.keepScreenAwake) return
+  const { volume, isMuted, playbackMode, quality, keepScreenAwake } = state
+  playerPreferencesStorage.write({ volume, isMuted, playbackMode, quality, keepScreenAwake })
 })

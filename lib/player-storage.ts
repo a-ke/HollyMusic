@@ -8,6 +8,7 @@ export interface PlayerPreferences {
   isMuted: boolean
   playbackMode: PlaybackMode
   quality: QualityType
+  keepScreenAwake: boolean
 }
 
 export interface PlaybackSession {
@@ -25,7 +26,7 @@ export interface PlayerTabState {
 }
 
 export const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
-  volume: 0.8, isMuted: false, playbackMode: 'sequence', quality: '320k',
+  volume: 0.8, isMuted: false, playbackMode: 'sequence', quality: '320k', keepScreenAwake: false,
 }
 export const PLAYER_PREFERENCES_KEY = 'holly-player-preferences'
 const LEGACY_QUALITY_KEY = 'player:quality'
@@ -43,6 +44,7 @@ function parsePreferences(value: unknown): PlayerPreferences | null {
     isMuted: typeof value.isMuted === 'boolean' ? value.isMuted : false,
     playbackMode: value.playbackMode === 'loop' || value.playbackMode === 'random' ? value.playbackMode : 'sequence',
     quality: isQuality(value.quality) ? value.quality : DEFAULT_PLAYER_PREFERENCES.quality,
+    keepScreenAwake: value.keepScreenAwake === true,
   }
 }
 

@@ -50,7 +50,8 @@ describe('播放器偏好', () => {
     player.toggleMute()
     player.cyclePlaybackMode()
     player.setQuality('flac')
-    expect(loadPlayerPreferences()).toEqual({ volume: 0, isMuted: true, playbackMode: 'loop', quality: 'flac' })
+    player.setKeepScreenAwake(true)
+    expect(loadPlayerPreferences()).toEqual({ volume: 0, isMuted: true, playbackMode: 'loop', quality: 'flac', keepScreenAwake: true })
   })
 
   it('迁移旧音质偏好，只在成功保存后移除旧键', () => {

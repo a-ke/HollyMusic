@@ -31,8 +31,13 @@ export function RecommendedMusicPage() {
       ) : (
         <div className="library-grid -mx-2">
           {tracks.map(track => (
-            <button key={track.uid} onClick={() => playTrack(track, tracks)} className="album-tile group flex min-w-0 flex-col gap-2 rounded-2xl p-2 text-left">
-              <div className="relative"><CoverImage uid={track.uid} cacheKey={track.musicInfo.img} className="cover-elevation aspect-square w-full rounded-xl" /><div className="absolute bottom-2 right-2 translate-y-2 rounded-full bg-primary p-2 text-primary-foreground opacity-0 shadow-lg transition group-hover:translate-y-0 group-hover:opacity-100"><Play className="h-4 w-4 fill-current" /></div></div>
+            <button key={track.uid} onClick={() => playTrack(track, tracks)} aria-label={`播放 ${track.name}`} className="album-tile group flex min-w-0 flex-col gap-2 rounded-2xl p-2 text-left">
+              <div className="relative">
+                <CoverImage uid={track.uid} cacheKey={track.musicInfo.img} className="cover-elevation aspect-square w-full rounded-xl" />
+                <div aria-hidden="true" className="absolute bottom-2 right-2 rounded-full bg-primary p-2 text-primary-foreground opacity-100 shadow-lg transition hoverable:translate-y-2 hoverable:opacity-0 hoverable:group-hover:translate-y-0 hoverable:group-hover:opacity-100 hoverable:group-focus-within:translate-y-0 hoverable:group-focus-within:opacity-100">
+                  <Play className="h-4 w-4 fill-current" />
+                </div>
+              </div>
               <div className="truncate text-sm font-medium">{track.name}</div>
               <div className="flex items-center gap-1.5"><span className="truncate text-xs text-muted-foreground">{track.artist}</span><SourceBadge source={track.source} /><QualityBadge musicInfo={track.musicInfo} /></div>
             </button>

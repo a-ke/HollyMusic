@@ -41,6 +41,7 @@ export function QueuePanel() {
       if (e.key !== 'Escape') return
       const t = e.target
       if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      e.preventDefault()
       setQueueOpen(false)
     }
     window.addEventListener('keydown', onKey)
@@ -51,7 +52,7 @@ export function QueuePanel() {
 
   return (
     <ModalMask
-      className="safe-screen fixed inset-0 z-40 flex justify-end bg-black/50"
+      className="safe-screen fixed inset-0 z-[60] flex justify-end bg-black/50"
       onClose={() => setQueueOpen(false)}
       role="dialog"
       aria-modal="true"
@@ -123,7 +124,7 @@ export function QueuePanel() {
                   </button>
                   <button
                     onClick={() => removeFromPlayNext(i)}
-                    className="touch-target flex items-center justify-center rounded-full text-muted-foreground opacity-70 hover:text-foreground focus-visible:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100"
+                    className="touch-target flex items-center justify-center rounded-full text-muted-foreground opacity-70 hover:text-foreground focus-visible:opacity-100 hoverable:opacity-0 hoverable:group-hover:opacity-100 hoverable:group-focus-within:opacity-100"
                     aria-label="移除"
                   >
                     <X className="h-4 w-4" />
@@ -158,7 +159,7 @@ export function QueuePanel() {
                 </button>
                 <button
                   onClick={() => removeFromQueue(i)}
-                  className="touch-target flex items-center justify-center rounded-full text-muted-foreground opacity-70 hover:text-foreground focus-visible:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100"
+                  className="touch-target flex items-center justify-center rounded-full text-muted-foreground opacity-70 hover:text-foreground focus-visible:opacity-100 hoverable:opacity-0 hoverable:group-hover:opacity-100 hoverable:group-focus-within:opacity-100"
                   aria-label="移除"
                 >
                   <X className="h-4 w-4" />

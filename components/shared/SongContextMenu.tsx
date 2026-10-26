@@ -78,7 +78,7 @@ export function SongContextMenu() {
     }
   }, [menu, close, isMobile])
 
-  // 「加入歌单」弹窗独立于菜单挂载：点「加入歌单」会 close() 菜单，弹窗不能跟着被卸载
+  // 「加入歌单」弹窗独立于菜单挂载：点「加入歌单」会 dismiss() 菜单，弹窗不能跟着被卸载
   // （旧结构在下方早返回 null，导致弹窗闪没 + playlistUid 残留，下次开菜单直接弹出弹窗）
   const playlistDialog = playlistUid && (
     <AddToPlaylistDialog uid={playlistUid} onClose={() => setPlaylistUid(null)} />
@@ -95,7 +95,7 @@ export function SongContextMenu() {
       text: `${track.name} - ${track.artist}`,
       url: buildSongShareUrl(track.uid),
     })
-    close()
+    dismiss()
   }
 
   const handleRemoveFromPlaylist = async () => {
@@ -118,20 +118,22 @@ export function SongContextMenu() {
   // 两套布局共用的菜单项列表（addNext/addToQueue 入插播队列必生效，toast 恒真）
   const menuItems = (
     <>
-      <MenuItem icon={Play} label="播放" onClick={() => { void playTrack(track); close() }} />
-      <MenuItem icon={Plus} label="下一首播放" onClick={() => { addNext(track); toast.info('已加入下一首播放'); close() }} />
-      <MenuItem icon={ListPlus} label="加入队列" onClick={() => { addToQueue(track); toast.info('已加入播放队列'); close() }} />
+      <MenuItem icon={Play} label="播放" onClick={() => { void playTrack(track); dismiss() }} />
+      <MenuItem icon={Plus} label="下一首播放" onClick={() => { addNext(track); toast.info('已加入下一首播放'); dismiss() }} />
+      <MenuItem icon={ListPlus} label="加入队列" onClick={() => { addToQueue(track); toast.info('已加入播放队列'); dismiss() }} />
       <MenuItem
         icon={Heart}
         label={isFav ? '取消收藏' : '收藏'}
         onClick={() => {
-          toggleFav(track.uid).catch(() =>
-            toast.error(isFav ? '取消收藏失败，请重试' : '收藏失败，请重试')
+          void toggleFav(track.uid).then(
+            () => toast.success(isFav ? '已取消收藏' : '已收藏'),
+            () => toast.error(isFav ? '取消收藏失败，请重试' : '收藏失败，请重试')
           )
-          close()
+          // 显式选择操作不受长按松手的背景关闭保护期限制。
+          dismiss()
         }}
       />
-      <MenuItem icon={ListMusic} label="加入歌单" onClick={() => { setPlaylistUid(track.uid); close() }} />
+      <MenuItem icon={ListMusic} label="加入歌单" onClick={() => { setPlaylistUid(track.uid); dismiss() }} />
       {playlistEntry && (
         <MenuItem icon={ListMinus} label="移出歌单" onClick={() => { void handleRemoveFromPlaylist() }} />
       )}
@@ -144,7 +146,7 @@ export function SongContextMenu() {
               uid: track.uid,
               quality: resolveQuality(usePlayerStore.getState().quality, track.musicInfo.types),
             })
-            close()
+            dismiss()
           }}
         />
       )}

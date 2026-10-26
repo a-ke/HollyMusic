@@ -76,6 +76,8 @@ async function click(button: Element | null) {
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value: function (this: HTMLDialogElement) { this.open = true } })
+  Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; this.dispatchEvent(new Event('close')) } })
   vi.stubGlobal('Audio', TestAudio)
   // 不执行 rAF：同时验证后台冻结动画时播放命令仍然有效。
   vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))

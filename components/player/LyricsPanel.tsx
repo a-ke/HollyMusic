@@ -2,25 +2,36 @@
 import { useEffect, useRef } from 'react'
 import { usePlayerStore } from '@/lib/store/player-store'
 import { useAppearanceStore } from '@/lib/store/appearance-store'
+import { useFavoritesStore } from '@/lib/store/favorites-store'
+import { toast } from '@/lib/toast'
 import { useLyrics } from '@/hooks/useLyrics'
 import { useLyricsPanel } from '@/hooks/useLyricsPanel'
 import { CoverImage } from '@/components/shared/CoverImage'
 import { AudioSpectrum } from './AudioSpectrum'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Heart, ListMusic } from 'lucide-react'
 import { SeekBar } from './SeekBar'
 import { TransportButtons } from './TransportButtons'
+import { PlayerButton } from './PlayerButton'
+import { MobilePlayerMenu } from './MobilePlayerMenu'
+import { PLAYBACK_MODE_CONFIG } from './playback-modes'
 
 interface LyricsPanelProps {
   audio: HTMLAudioElement | null
+  onOpenEqualizer?: () => void
 }
 
-export function LyricsPanel({ audio }: LyricsPanelProps) {
+export function LyricsPanel({ audio, onOpenEqualizer }: LyricsPanelProps) {
   const { isOpen, close } = useLyricsPanel()
   const coverAtmosphere = useAppearanceStore(s => s.coverAtmosphere)
   const track = usePlayerStore(s => s.currentTrack)
   const currentTime = usePlayerStore(s => s.currentTime)
   const isPlaying = usePlayerStore(s => s.isPlaying)
   const seek = usePlayerStore(s => s.seek)
+  const toggleQueue = usePlayerStore(s => s.toggleQueue)
+  const playbackMode = usePlayerStore(s => s.playbackMode)
+  const cyclePlaybackMode = usePlayerStore(s => s.cyclePlaybackMode)
+  const isFav = useFavoritesStore(s => track ? s.ids.has(track.uid) : false)
+  const toggleFavorite = useFavoritesStore(s => s.toggle)
   const { lines, activeIndex, hasLyric, loading } = useLyrics(track?.uid, currentTime)
 
   const activeRef = useRef<HTMLDivElement>(null)
@@ -29,7 +40,8 @@ export function LyricsPanel({ audio }: LyricsPanelProps) {
   useEffect(() => {
     if (!isOpen) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (usePlayerStore.getState().isQueueOpen) return
       const t = e.target
       if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
       close()
@@ -49,6 +61,7 @@ export function LyricsPanel({ audio }: LyricsPanelProps) {
   }, [activeIndex, isOpen])
 
   if (!isOpen || !track) return null
+  const { icon: ModeIcon, label: modeLabel } = PLAYBACK_MODE_CONFIG[playbackMode]
 
   return (
     <div
@@ -58,8 +71,8 @@ export function LyricsPanel({ audio }: LyricsPanelProps) {
       aria-label="歌词面板"
     >
       {coverAtmosphere && <div className="lyrics-cover-glow" aria-hidden="true"><CoverImage uid={track.uid} cacheKey={track.musicInfo.img} /></div>}
-      {/* 顶部：极简返回箭头（safe-area 保护，避开状态栏/刘海） */}
-      <div className="safe-header flex shrink-0 items-center px-2">
+      {/* 顶部保留返回和次要设置入口，常用操作位于底部。 */}
+      <div className="safe-header flex shrink-0 items-center justify-between px-2">
         <button
           onClick={close}
           className="touch-target flex items-center justify-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground"
@@ -67,6 +80,7 @@ export function LyricsPanel({ audio }: LyricsPanelProps) {
         >
           <ChevronDown className="h-6 w-6" />
         </button>
+        <MobilePlayerMenu onOpenEqualizer={onOpenEqualizer} />
       </div>
 
       {/* 中部：歌词占据视觉中心 */}
@@ -108,12 +122,21 @@ export function LyricsPanel({ audio }: LyricsPanelProps) {
         </div>
       </div>
 
-      {/* 歌曲信息已在上方展示，底部只保留进度与控制，让背景自然延续。 */}
+      {/* 常用操作直接可见；进度和播放控制独立成行，适应窄屏。 */}
       <div className="lyrics-controls safe-area-bottom shrink-0 px-5 pt-2 desktop:px-10">
         <div className="mx-auto flex max-w-xl flex-col items-center gap-2">
           <div className="hidden w-full px-10 desktop:block"><AudioSpectrum audio={audio} isPlaying={isPlaying} className="h-3 opacity-70" /></div>
           <div className="flex w-full items-center gap-2"><SeekBar /></div>
-          <TransportButtons />
+          <div className="flex w-full items-center justify-between gap-2">
+            <PlayerButton icon={ModeIcon} label={modeLabel} onClick={cyclePlaybackMode} />
+            <TransportButtons />
+            <PlayerButton icon={ListMusic} label="队列" onClick={toggleQueue} />
+          </div>
+          <button type="button" aria-label={isFav ? '取消收藏' : '收藏'} aria-pressed={isFav}
+            onClick={() => { void toggleFavorite(track.uid).catch(() => toast.error('收藏操作失败，请重试')) }}
+            className={`flex min-h-11 items-center gap-2 rounded-xl px-4 text-sm hover:bg-accent ${isFav ? 'text-primary' : 'text-muted-foreground'}`}>
+            <Heart className={`h-4 w-4 ${isFav ? 'fill-current' : ''}`} />{isFav ? '已收藏' : '收藏'}
+          </button>
         </div>
       </div>
     </div>

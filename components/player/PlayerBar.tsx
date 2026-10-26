@@ -1,5 +1,6 @@
 
 import { useEffect, useRef } from 'react'
+import { useScreenWakeLock } from '@/hooks/useScreenWakeLock'
 import { usePlayerStore } from '@/lib/store/player-store'
 import { useAudioPlayer } from '@/hooks/useAudioPlayer'
 import { useMediaSession } from '@/hooks/useMediaSession'
@@ -84,6 +85,7 @@ export function PlayerBar({ audio, onAudioElement, onOpenEqualizer }: PlayerBarP
 
   // 同步当前曲目到 MediaSession（锁屏/通知/耳机控制）
   useMediaSession()
+  useScreenWakeLock(audio)
   // PC 端全局键盘快捷键
   useKeyboardShortcuts()
 

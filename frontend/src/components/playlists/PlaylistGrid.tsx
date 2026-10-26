@@ -52,7 +52,7 @@ export function PlaylistGrid({ playlists, currentUsername, onEdit, onDelete }: P
                 aria-label={`操作歌单：${playlist.name}`}
                 aria-expanded={openMenuId === playlist.id}
                 onClick={() => setOpenMenuId(id => id === playlist.id ? null : playlist.id)}
-                className="absolute bottom-2 right-2 rounded p-1 text-muted-foreground opacity-100 transition hover:bg-accent hover:text-foreground sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100"
+                className="absolute bottom-2 right-2 rounded p-1 text-muted-foreground opacity-100 transition hover:bg-accent hover:text-foreground hoverable:opacity-0 hoverable:group-hover:opacity-100 hoverable:group-focus-within:opacity-100 hoverable:aria-expanded:opacity-100"
               >
                 <MoreHorizontal className="h-4 w-4" />
               </button>

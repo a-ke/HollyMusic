@@ -18,6 +18,9 @@ interface PlayerButtonProps {
   showLabel?: boolean
   size?: 'sm' | 'md'
   disabled?: boolean
+  'aria-expanded'?: boolean
+  'aria-haspopup'?: 'dialog' | 'menu'
+  'aria-pressed'?: boolean
 }
 
 export function PlayerButton({
@@ -28,10 +31,12 @@ export function PlayerButton({
   showLabel = false,
   size = 'md',
   disabled = false,
+  ...accessibility
 }: PlayerButtonProps) {
   return (
     <button
       type="button"
+      {...accessibility}
       onClick={onClick}
       disabled={disabled}
       aria-label={label}

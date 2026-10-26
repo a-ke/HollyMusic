@@ -9,6 +9,10 @@
 @source "../../lib";
 
 @custom-variant dark (&:is(.dark *));
+/* 只有同时支持悬停与精细指针，才允许把操作入口收起。 */
+@custom-variant hoverable {
+  @media (hover: hover) and (pointer: fine) { @slot; }
+}
 /* 手机横屏虽宽于 768px，高度不足时仍使用紧凑导航和播放栏。 */
 @custom-variant desktop {
   @media (min-width: 768px) and (min-height: 500px) { @slot; }
@@ -167,7 +171,6 @@
 .safe-dialog-backdrop { padding: calc(16px + var(--safe-area-top)) calc(16px + var(--safe-area-right)) calc(16px + var(--safe-area-bottom)) calc(16px + var(--safe-area-left)); }
 .safe-dialog { max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 32px); overflow-y: auto; }
 .safe-form-page { padding: calc(20px + var(--safe-area-top)) calc(20px + var(--safe-area-right)) calc(20px + var(--safe-area-bottom)) calc(20px + var(--safe-area-left)); }
-.mobile-player-menu { right: calc(8px + var(--safe-area-right)); max-height: min(60dvh, calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 120px)); }
 .song-action-sheet { left: var(--safe-area-left); right: var(--safe-area-right); }
 .toast-stack { right: calc(16px + var(--safe-area-right)); bottom: calc(120px + var(--safe-area-bottom)); max-width: calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 32px); }
 .page-shell { width: 100%; padding: 28px 32px 40px; }
@@ -178,11 +181,10 @@
 .cover-elevation { box-shadow: 0 6px 16px var(--surface-shadow), 0 1px 2px var(--surface-shadow); }
 .featured-art { box-shadow: 0 12px 24px var(--surface-shadow), 0 2px 5px var(--surface-shadow); }
 .album-tile { transition: background-color 180ms, transform 180ms; }
-.album-tile:hover { background: var(--card); transform: translateY(-3px); }
+@media (hover: hover) and (pointer: fine) {
+  .album-tile:hover { background: var(--card); transform: translateY(-3px); }
+}
 .album-tile:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-.track-list > :nth-child(even) { background-color: color-mix(in oklch, var(--muted) 18%, transparent); }
-.track-list > :hover { background-color: color-mix(in oklch, var(--accent) 55%, transparent); }
-.track-list > [data-current="true"] { background-color: color-mix(in oklch, var(--primary) 9%, var(--card)); }
 @media (min-width: 768px) and (min-height: 500px) {
   .app-viewport { padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom); }
   /* 外层保留完整圆角，内层原生滚动条整体内缩，避免端点被圆弧裁掉。 */
