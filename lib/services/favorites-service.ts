@@ -7,7 +7,7 @@
  * song id 统一为 source-{存储songmid}，与 db.resolveMusicInfoById 的解析口径一致。
  */
 
-import { PrismaClient } from '../generated/prisma'
+import { Prisma, PrismaClient, type Favorite } from '../generated/prisma'
 import { starItems, unstarItems, listFavorites } from '../favorites'
 import { getStorageSongmidForMusicInfo } from '../db'
 import { logger } from '../logger'
@@ -98,13 +98,40 @@ export async function unstarSong(userId: number, songId: string): Promise<{ star
  */
 export async function listFavoriteSongs(
   userId: number,
-  opts?: { limit?: number; offset?: number }
+  opts?: { limit?: number; offset?: number; query?: string }
 ): Promise<{ list: FavoriteSong[]; total: number }> {
   const limit = opts?.limit ?? 200
   const offset = opts?.offset ?? 0
+  const query = opts?.query?.trim().toLowerCase()
 
-  const rows = await listFavorites(userId, { itemType: 'song', limit, offset })
-  const total = await prisma.favorite.count({ where: { userId, itemType: 'song' } })
+  let rows: Favorite[]
+  let total: number
+  if (query) {
+    // 在分页前搜索全部收藏；兼容旧数据尚未回填的检索列，且按字面匹配 % / _。
+    const matching = Prisma.sql`
+      FROM "Favorite" f
+      INNER JOIN "MusicInfo" m
+        ON m."source" = substr(f."itemId", 1, instr(f."itemId", '-') - 1)
+        AND m."songmid" = substr(f."itemId", instr(f."itemId", '-') + 1)
+      WHERE f."userId" = ${userId} AND f."itemType" = 'song'
+        AND (
+          instr(lower(coalesce(m."name", json_extract(CASE WHEN json_valid(m."data") THEN m."data" ELSE '{}' END, '$.name'), '')), ${query}) > 0
+          OR instr(lower(coalesce(m."singer", json_extract(CASE WHEN json_valid(m."data") THEN m."data" ELSE '{}' END, '$.singer'), '')), ${query}) > 0
+          OR instr(lower(coalesce(m."albumName", json_extract(CASE WHEN json_valid(m."data") THEN m."data" ELSE '{}' END, '$.albumName'), '')), ${query}) > 0
+        )
+    `
+    const [matches, counts] = await Promise.all([
+      prisma.$queryRaw<Favorite[]>(Prisma.sql`
+        SELECT f.* ${matching} ORDER BY f."createdAt" DESC, f."id" DESC LIMIT ${limit} OFFSET ${offset}
+      `),
+      prisma.$queryRaw<{ total: bigint }[]>(Prisma.sql`SELECT count(*) AS total ${matching}`),
+    ])
+    rows = matches
+    total = Number(counts[0].total)
+  } else {
+    rows = await listFavorites(userId, { itemType: 'song', limit, offset })
+    total = await prisma.favorite.count({ where: { userId, itemType: 'song' } })
+  }
 
   const musicInfoById = await resolveMusicInfoBatch(rows.map(r => r.itemId))
 

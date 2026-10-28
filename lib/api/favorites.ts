@@ -14,9 +14,10 @@ export interface FavoriteSong {
 
 export function listFavorites(
   limit = 200,
-  offset = 0
+  offset = 0,
+  query?: string
 ): Promise<{ list: FavoriteSong[]; total: number }> {
-  return apiGet('favorites', { limit, offset })
+  return apiGet('favorites', { limit, offset, q: query })
 }
 
 export function starSong(uid: string): Promise<{ starred: boolean }> {

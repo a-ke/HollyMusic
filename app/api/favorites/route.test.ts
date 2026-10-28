@@ -81,6 +81,18 @@ describe('GET /api/favorites', () => {
     expect(listFavoriteSongs).toHaveBeenCalledWith(1, { limit: 500, offset: 0 })
   })
 
+  it('透传去除首尾空白的搜索词及分页参数', async () => {
+    const query = new URLSearchParams({ q: '  周杰伦  ', limit: '50', offset: '100' })
+    const res = await GET(new NextRequest(`http://localhost/api/favorites?${query}`))
+    expect(res.status).toBe(200)
+    expect(listFavoriteSongs).toHaveBeenCalledWith(1, { limit: 50, offset: 100, query: '周杰伦' })
+  })
+
+  it('空白搜索词恢复普通收藏列表', async () => {
+    await GET(new NextRequest('http://localhost/api/favorites?q=%20%20'))
+    expect(listFavoriteSongs).toHaveBeenCalledWith(1, { limit: 200, offset: 0 })
+  })
+
   it.each([
     ['limit=abc', 'limit 非数字'],
     ['limit=0', 'limit 小于 1'],

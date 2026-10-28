@@ -11,7 +11,7 @@ vi.mock('@/lib/api/favorites', () => api)
 vi.mock('@/lib/toast', () => ({ toast: { error: toastError } }))
 vi.mock('@/components/shared/SongList', () => ({ SongList: ({ tracks }: { tracks: { uid: string }[] }) => <div>{tracks.map(t => t.uid).join(',')}</div> }))
 vi.mock('@/components/shared/LoadingSkeleton', () => ({ LoadingSkeleton: () => <div>loading</div> }))
-vi.mock('@/components/shared/EmptyState', () => ({ EmptyState: () => <div>empty</div> }))
+vi.mock('@/components/shared/EmptyState', () => ({ EmptyState: ({ title }: { title: string }) => <div>{title}</div> }))
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -35,11 +35,14 @@ beforeEach(() => {
   api.listFavorites.mockResolvedValue({ list: [], total: 0 })
   useFavoritesStore.getState().reset()
   container = document.createElement('div')
+  document.body.append(container)
   root = createRoot(container)
 })
 afterEach(async () => {
   await act(async () => { root.unmount() })
   useFavoritesStore.getState().reset()
+  container.remove()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 async function mount() {
@@ -47,9 +50,21 @@ async function mount() {
   await act(async () => { root.render(<FavoritesPage />) })
 }
 async function loadMore() {
-  const button = container.querySelector('button')!
+  const button = [...container.querySelectorAll('button')].find(button => button.textContent?.includes('加载更多'))!
   expect(button.textContent).toContain('加载更多')
   await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+}
+
+async function typeSearch(value: string) {
+  const input = container.querySelector('input')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+async function finishTyping() {
+  await act(async () => { await vi.advanceTimersByTimeAsync(250) })
 }
 
 it('收藏刷新完成后丢弃此前发出的加载更多响应', async () => {
@@ -126,4 +141,81 @@ it('分页仍按原始条目偏移推进，避免去重后反复读取重叠页�
   await loadMore()
   expect(api.listFavorites).toHaveBeenLastCalledWith(100, 200)
   expect(container.textContent).not.toContain('加载更多')
+})
+
+it('输入自动搜索全部收藏，并在搜索结果翻页时保留关键词', async () => {
+  vi.useFakeTimers()
+  await mount()
+  await typeSearch('  SOng')
+  await typeSearch('  SOng150  ')
+  expect(api.listFavorites).toHaveBeenCalledTimes(1)
+  api.listFavorites.mockResolvedValueOnce({ list: favorites(150, 100), total: 120 })
+  await finishTyping()
+  expect(api.listFavorites).toHaveBeenLastCalledWith(100, 0, 'song150')
+  expect(container.textContent).toContain('找到 120 首音乐')
+  api.listFavorites.mockResolvedValueOnce({ list: favorites(250, 20), total: 120 })
+  await loadMore()
+  expect(api.listFavorites).toHaveBeenLastCalledWith(100, 100, 'song150')
+  expect(container.textContent).toContain('kw-song269')
+})
+
+it('切换搜索词或清空搜索后忽略旧请求，清空恢复列表并聚焦输入框', async () => {
+  vi.useFakeTimers()
+  await mount()
+  const pending = deferred<{ list: FavoriteSong[]; total: number }>()
+  api.listFavorites.mockReturnValueOnce(pending.promise)
+  await typeSearch('旧搜索')
+  await finishTyping()
+  await typeSearch('新搜索')
+  await act(async () => { pending.resolve({ list: favorites(800, 1), total: 1 }) })
+  expect(container.textContent).not.toContain('kw-song800')
+  api.listFavorites.mockResolvedValueOnce({ list: favorites(900, 1), total: 1 })
+  await finishTyping()
+  expect(container.textContent).toContain('kw-song900')
+  api.listFavorites.mockResolvedValueOnce({ list: favorites(0, 100), total: 200 })
+  await act(async () => {
+    container.querySelector('[aria-label="清空搜索词"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  expect(api.listFavorites).toHaveBeenLastCalledWith(100, 0)
+  expect(container.textContent).toContain('已收藏 200 首音乐')
+  expect(container.querySelector('input')?.value).toBe('')
+  expect(document.activeElement).toBe(container.querySelector('input'))
+})
+
+it('中文输入法选词期间不搜索，确认后搜索并区分无结果与未收藏', async () => {
+  vi.useFakeTimers()
+  await mount()
+  const input = container.querySelector('input')!
+  await act(async () => { input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })) })
+  await typeSearch('zhou')
+  await finishTyping()
+  expect(api.listFavorites).toHaveBeenCalledTimes(1)
+  await typeSearch('周杰伦')
+  await act(async () => { input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })) })
+  await finishTyping()
+  expect(api.listFavorites).toHaveBeenLastCalledWith(100, 0, '周杰伦')
+  expect(container.textContent).toContain('未找到匹配的收藏')
+  expect(container.textContent).toContain('找到 0 首音乐')
+  expect(container.textContent).not.toContain('还没有收藏')
+})
+
+it('搜索失败可使用相同关键词重试，取消收藏后保持当前搜索', async () => {
+  vi.useFakeTimers()
+  await mount()
+  api.listFavorites.mockRejectedValueOnce(new Error('offline'))
+  await typeSearch('歌曲')
+  await finishTyping()
+  expect(container.textContent).toContain('搜索收藏失败')
+  api.listFavorites.mockResolvedValueOnce({ list: favorites(0, 1), total: 1 })
+  await act(async () => {
+    const retry = [...container.querySelectorAll('button')].find(button => button.textContent === '重试')!
+    retry.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  await finishTyping()
+  expect(container.textContent).toContain('找到 1 首音乐')
+  await act(async () => { useFavoritesStore.setState({ version: 1 }) })
+  await finishTyping()
+  expect(api.listFavorites).toHaveBeenLastCalledWith(100, 0, '歌曲')
+  expect(container.querySelector('input')?.value).toBe('歌曲')
+  expect(container.textContent).toContain('未找到匹配的收藏')
 })

@@ -1,6 +1,6 @@
 /**
  * 收藏 API
- * GET    /api/favorites?limit=&offset=   收藏列表
+ * GET    /api/favorites?limit=&offset=&q= 收藏列表（可按歌曲、歌手、专辑搜索）
  * POST   /api/favorites  body {id}       收藏
  * DELETE /api/favorites?id=              取消收藏
  */
@@ -56,7 +56,8 @@ export async function GET(request: NextRequest) {
         400
       )
     }
-    const data = await listFavoriteSongs(user.id, page)
+    const query = request.nextUrl.searchParams.get('q')?.trim()
+    const data = await listFavoriteSongs(user.id, query ? { ...page, query } : page)
     return createSuccessResponse(data)
   } catch (err) {
     const guard = authGuard(err)
