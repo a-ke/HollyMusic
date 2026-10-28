@@ -54,7 +54,7 @@ export function SongRow({ track, queue, index, playlistEntry, localPlayback }: S
     if (isCurrent && (!localPlayback || (state.streamUrl?.startsWith('blob:') && state.effectiveQuality === localPlayback.quality))) {
       usePlayerStore.getState().togglePlay()
     } else {
-      void playTrack(track, queue, localPlayback ? { offline: true, quality: localPlayback.quality } : undefined)
+      void playTrack(track, queue, { queueIndex: index, ...(localPlayback ? { offline: true, quality: localPlayback.quality } : {}) })
     }
   }
 

@@ -232,13 +232,12 @@ const local128 = { ...track, playback: { source: 'local', quality: '128k' } as c
 const secondLocal = { ...track, uid: 'kw-2', musicInfo: { ...track.musicInfo, songmid: '2' },
   playback: { source: 'local', quality: '320k' } as const }
 
-it.each(['next', 'previous', 'ended', 'random'])('联网本地队列通过 %s 切歌时沿用每条歌曲的缓存音质', async action => {
+it.each(['next', 'ended', 'random'])('联网本地队列通过 %s 切歌时沿用每条歌曲的缓存音质', async action => {
   useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null })
   vi.mocked(getOfflineAudio).mockImplementation(async (_user, uid, quality) => ({ url: `blob:${uid}:${quality}`, quality }))
   usePlayerStore.setState({ quality: 'flac', codecCap: 'flac24bit' })
   await usePlayerStore.getState().playTrack(local128, [local128, secondLocal])
-  if (action === 'previous') usePlayerStore.getState().previous()
-  else if (action === 'ended') usePlayerStore.getState().handleTrackEnd()
+  if (action === 'ended') usePlayerStore.getState().handleTrackEnd()
   else {
     if (action === 'random') usePlayerStore.setState({ playbackMode: 'random' })
     usePlayerStore.getState().next()
@@ -247,6 +246,21 @@ it.each(['next', 'previous', 'ended', 'random'])('联网本地队列通过 %s �
   expect(getOfflineAudio).toHaveBeenNthCalledWith(1, 'alice', 'kw-1', '128k', ['128k'])
   expect(getOfflineAudio).toHaveBeenNthCalledWith(2, 'alice', 'kw-2', '320k', ['320k'])
   expect(usePlayerStore.getState().quality).toBe('flac')
+  expect(reportPlay).not.toHaveBeenCalled()
+})
+
+it('本地播放回退与再次前进使用各自绑定音质，不转成在线播放', async () => {
+  useAuthStore.setState({ authenticated: true, username: 'alice', offlineUsername: null })
+  vi.mocked(getOfflineAudio).mockImplementation(async (_user, uid, quality) => ({ url: `blob:${uid}:${quality}`, quality }))
+  await usePlayerStore.getState().playTrack(local128, [local128, secondLocal])
+  usePlayerStore.getState().markPlaybackStarted()
+  usePlayerStore.getState().next()
+  await vi.waitFor(() => expect(usePlayerStore.getState().streamUrl).toBe('blob:kw-2:320k'))
+  usePlayerStore.getState().markPlaybackStarted()
+  usePlayerStore.getState().previous()
+  await vi.waitFor(() => expect(usePlayerStore.getState().streamUrl).toBe('blob:kw-1:128k'))
+  usePlayerStore.getState().next()
+  await vi.waitFor(() => expect(usePlayerStore.getState().streamUrl).toBe('blob:kw-2:320k'))
   expect(reportPlay).not.toHaveBeenCalled()
 })
 

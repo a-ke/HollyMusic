@@ -16,8 +16,20 @@ export function startPlayerSession(username: string): () => void {
   const settings = tabSettings.read()
   usePlayerStore.getState().setSleepTimer(settings?.sleepTimer ?? null)
   usePlayerStore.setState({ isQueueOpen: settings?.isQueueOpen ?? false })
-  // 固定本标签页的初始副本，不让其他标签页之后的写入影响刷新恢复。
-  tab.write(session ?? { queue: [], playNextQueue: [], currentTrack: null, currentIndex: -1, isCurrentTempPlay: false, currentTime: 0 })
+  const snapshot = (): PlaybackSession => {
+    const state = usePlayerStore.getState()
+    const currentTrack = state.currentTrack ? { ...state.currentTrack, duration: state.duration || state.currentTrack.duration } : null
+    const navigation = state.navigation?.current && currentTrack ? {
+      ...state.navigation,
+      current: { ...state.navigation.current, entry: { ...state.navigation.current.entry, track: currentTrack } },
+    } : state.navigation
+    return {
+      queue: state.queue, playNextQueue: state.playNextQueue, currentIndex: state.currentIndex,
+      currentTrack, isCurrentTempPlay: state.isCurrentTempPlay, currentTime: state.currentTime, navigation,
+    }
+  }
+  // 固定本标签页的初始副本，同时将旧版本会话迁移为带导航记录的格式。
+  tab.write(snapshot())
   usePlayerStore.setState({ restoredForUsername: username })
 
   let dirty = false
@@ -25,14 +37,9 @@ export function startPlayerSession(username: string): () => void {
   const save = () => {
     if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
     if (!dirty) return
-    const state = usePlayerStore.getState()
-    const snapshot: PlaybackSession = {
-      queue: state.queue, playNextQueue: state.playNextQueue, currentIndex: state.currentIndex,
-      currentTrack: state.currentTrack ? { ...state.currentTrack, duration: state.duration || state.currentTrack.duration } : null,
-      isCurrentTempPlay: state.isCurrentTempPlay, currentTime: state.currentTime,
-    }
-    tab.write(snapshot)
-    local.write(snapshot)
+    const saved = snapshot()
+    tab.write(saved)
+    local.write(saved)
     dirty = false
   }
   const saveSettings = () => {
@@ -43,7 +50,7 @@ export function startPlayerSession(username: string): () => void {
     if (state.sleepTimer !== previous.sleepTimer || state.isQueueOpen !== previous.isQueueOpen) saveSettings()
     const structureChanged = state.queue !== previous.queue || state.playNextQueue !== previous.playNextQueue
       || state.currentTrack !== previous.currentTrack || state.currentIndex !== previous.currentIndex
-      || state.isCurrentTempPlay !== previous.isCurrentTempPlay
+      || state.isCurrentTempPlay !== previous.isCurrentTempPlay || state.navigation !== previous.navigation
     if (structureChanged || state.currentTime !== previous.currentTime || state.duration !== previous.duration) dirty = true
     if (structureChanged || (previous.isPlaying && !state.isPlaying) || state.seekNonce !== previous.seekNonce) save()
     else if (dirty && saveTimer === null) saveTimer = setTimeout(save, PROGRESS_SAVE_INTERVAL_MS)
@@ -72,7 +79,9 @@ export function syncPlayerPreferences(): () => void {
     if (event.key !== PLAYER_PREFERENCES_KEY && event.key !== null) return
     try {
       if (event.storageArea !== window.localStorage) return
-      usePlayerStore.setState(playerPreferencesStorage.read() ?? DEFAULT_PLAYER_PREFERENCES)
+      const preferences = playerPreferencesStorage.read() ?? DEFAULT_PLAYER_PREFERENCES
+      usePlayerStore.getState().setPlaybackMode(preferences.playbackMode)
+      usePlayerStore.setState(preferences)
     } catch { /* 浏览器禁用存储时仍可操作播放器。 */ }
   }
   window.addEventListener('storage', onStorage)

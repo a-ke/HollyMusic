@@ -38,9 +38,9 @@ it('复用歌曲行样式，以缓存音质播放，并将在线操作替换为�
     await act(async () => { (container.querySelector('[aria-label="播放 歌曲"]') as HTMLButtonElement).click() })
     const localTrack = { ...track, playback: { source: 'local', quality: '128k' } }
     const local320Track = { ...track, playback: { source: 'local', quality: '320k' } }
-    expect(playTrack).toHaveBeenCalledWith(localTrack, [localTrack, local320Track], { offline: true, quality: '128k' })
+    expect(playTrack).toHaveBeenCalledWith(localTrack, [localTrack, local320Track], { offline: true, quality: '128k', queueIndex: 0 })
     await act(async () => { (container.querySelectorAll('[aria-label="播放 歌曲"]')[1] as HTMLButtonElement).click() })
-    expect(playTrack).toHaveBeenLastCalledWith(local320Track, [localTrack, local320Track], { offline: true, quality: '320k' })
+    expect(playTrack).toHaveBeenLastCalledWith(local320Track, [localTrack, local320Track], { offline: true, quality: '320k', queueIndex: 1 })
     await act(async () => { (container.querySelector('[aria-label="删除 歌曲 的本地缓存"]') as HTMLButtonElement).click() })
     expect(remove).toHaveBeenCalledWith(0)
     await act(async () => { usePlayerStore.setState({ currentTrack: track, effectiveQuality: '128k', isPlaying: true, streamUrl: 'blob:local' }) })

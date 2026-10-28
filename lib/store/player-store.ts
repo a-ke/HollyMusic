@@ -15,6 +15,11 @@ import { useAuthStore } from '@/hooks/useAuth'
 import { logger } from '@/lib/logger'
 import { loadPlayerPreferences, playerPreferencesStorage, type PlaybackSession, type PlayerTabState } from '@/lib/player-storage'
 import { getOfflineAudio } from '@/lib/offline-audio'
+import {
+  confirmQueuePlayback, emptyPlaybackQueue, enqueueTrack, nextQueueEntry, playFutureEntry,
+  playManualEntry, previousQueueEntry, projectPlaybackQueue, removeManualEntry, removeQueueEntry,
+  restoreLegacyQueue, selectTrack, setQueueShuffle, type PlaybackQueue,
+} from '@/lib/player-queue'
 
 /** 原生元数据就绪前使用曲目信息，避免有已知时长却显示 0:00。 */
 function initialDuration(track: Track): number {
@@ -44,6 +49,8 @@ interface PlayerStore {
   restoredForUsername: string | null
   // 队列与当前
   queue: Track[]
+  /** 队列控制模块的会话状态；旧显示字段由它统一投影。 */
+  navigation: PlaybackQueue | null
   /** 手动插播队列（"下一首播放"插队头 / "加入队列"排队尾）。
    *  独立于主队列、优先于一切播放模式（对齐 Spotify "Next in queue" 与 LX tempPlayList）：
    *  随机/单曲循环都会先消费插播；播完即出队、不回流主队列；换列表播放时保留。 */
@@ -91,7 +98,7 @@ interface PlayerStore {
   isQueueOpen: boolean
 
   // 核心动作
-  playTrack: (track: Track, queue?: Track[], options?: { offline?: boolean; quality?: QualityType }) => Promise<void>
+  playTrack: (track: Track, queue?: Track[], options?: { offline?: boolean; quality?: QualityType; queueIndex?: number }) => Promise<void>
   loadStreamUrl: (track: Track, forceQuality?: QualityType, options?: { startTime?: number; autoplay?: boolean; offline?: boolean }) => Promise<void>
   /** 只恢复显示状态；用户点击播放时才加载音频，不计入一次新播放。 */
   restorePlayback: (session: PlaybackSession | null) => void
@@ -99,6 +106,7 @@ interface PlayerStore {
   playByUid: (uid: string) => Promise<void>
   togglePlay: () => void
   setIsPlaying: (v: boolean, options?: { fromAudio?: boolean }) => void
+  markPlaybackStarted: () => void
   setCurrentTime: (t: number) => void
   setDuration: (d: number) => void
   setBufferProgress: (v: number | null) => void
@@ -107,6 +115,7 @@ interface PlayerStore {
   setVolume: (v: number) => void
   toggleMute: () => void
   cyclePlaybackMode: () => void
+  setPlaybackMode: (mode: PlaybackMode) => void
   setQuality: (q: QualityType) => void
   setKeepScreenAwake: (enabled: boolean) => void
 
@@ -121,6 +130,9 @@ interface PlayerStore {
   clearPlayNext: () => void
   /** 消费插播队列第 index 首并立即播放（next/handleTrackEnd 优先调 index 0；队列面板点击用） */
   playFromPlayNext: (index: number) => void
+  playFromQueue: (index: number) => void
+  playFromFuture: (index: number) => void
+  removeFromFuture: (index: number) => void
   removeFromQueue: (index: number) => void
   clearQueue: () => void
 
@@ -134,9 +146,26 @@ interface PlayerStore {
   clearSleepTimer: () => void
 }
 
-export const usePlayerStore = create<PlayerStore>((set, get) => ({
+export const usePlayerStore = create<PlayerStore>((set, get) => {
+  const navigation = () => {
+    const state = get()
+    return setQueueShuffle(state.navigation ?? restoreLegacyQueue(state, state.playbackMode), state.playbackMode === 'random')
+  }
+  const activate = async (next: PlaybackQueue, options?: { offline?: boolean; quality?: QualityType }) => {
+    const track = next.current?.entry.track
+    if (!track) return
+    // 同步切换队列与播放意图，使旧 Audio 事件立即失效，包括同曲的不同队列条目。
+    set({ ...projectPlaybackQueue(next), currentTime: 0, duration: initialDuration(track),
+      isFetchingUrl: true, urlFetchError: null })
+    const request = get().loadStreamUrl(track, options?.quality, { offline: options?.offline })
+    const requestId = streamRequestId
+    await request
+    if (requestId === streamRequestId && !options?.offline) reportPlayIfAuthed(track)
+  }
+  return ({
   restoredForUsername: null,
   queue: [],
+  navigation: null,
   playNextQueue: [],
   isCurrentTempPlay: false,
   currentIndex: -1,
@@ -163,28 +192,15 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   isQueueOpen: false,
 
   playTrack: async (track, newQueue, options) => {
-    if (newQueue && newQueue.length > 0) {
-      const idx = newQueue.findIndex(t => t.uid === track.uid && t.playback?.source === track.playback?.source
-        && t.playback?.quality === track.playback?.quality)
-      set({ queue: newQueue, currentIndex: idx >= 0 ? idx : 0 })
-    } else {
-      const existing = get().queue.findIndex(t => t.uid === track.uid && t.playback?.source === track.playback?.source
-        && t.playback?.quality === track.playback?.quality)
-      if (existing >= 0) {
-        set({ currentIndex: existing })
-      } else {
-        set(s => ({ queue: [...s.queue, track], currentIndex: s.queue.length }))
-      }
-    }
-    set({ currentTrack: track, isCurrentTempPlay: false, currentTime: 0, duration: initialDuration(track), urlFetchError: null })
-    await get().loadStreamUrl(track, options?.quality, { offline: options?.offline })
-    if (!options?.offline) reportPlayIfAuthed(track)
+    await activate(selectTrack(navigation(), track, newQueue, options?.queueIndex), options)
   },
 
   restorePlayback: (session) => {
     get().clearQueue()
-    set({ ...(session ?? {}), duration: session?.currentTrack ? initialDuration(session.currentTrack) : 0,
-      isQueueOpen: false })
+    if (!session) return
+    const next = setQueueShuffle(session.navigation ?? restoreLegacyQueue(session, get().playbackMode), get().playbackMode === 'random')
+    set({ ...projectPlaybackQueue(next), currentTime: session.currentTime,
+      duration: next.current ? initialDuration(next.current.entry.track) : 0, isQueueOpen: false })
   },
 
   loadStreamUrl: async (track, forceQuality?, options?) => {
@@ -259,6 +275,11 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     if (v && currentTrack && !streamUrl && !isFetchingUrl) {
       void get().loadStreamUrl(currentTrack, undefined, { startTime: currentTime })
     } else set({ isPlaying: v && currentTrack !== null })
+  },
+  markPlaybackStarted: () => {
+    const current = navigation()
+    const confirmed = confirmQueuePlayback(current)
+    if (confirmed !== get().navigation) set({ navigation: confirmed })
   },
   setCurrentTime: (t) => set(s => {
     // 播放超过 5 秒视为「播放稳定」，重置连续失败计数（区分「真失败」与「稳定播放」）
@@ -344,12 +365,11 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   setVolume: (v) => { if (Number.isFinite(v)) set({ volume: Math.max(0, Math.min(1, v)), isMuted: false }) },
   toggleMute: () => set(s => ({ isMuted: !s.isMuted })),
   setKeepScreenAwake: enabled => set({ keepScreenAwake: enabled }),
-  cyclePlaybackMode: () =>
-    set(s => {
-      const modes: PlaybackMode[] = ['sequence', 'loop', 'random']
-      const i = modes.indexOf(s.playbackMode)
-      return { playbackMode: modes[(i + 1) % modes.length] }
-    }),
+  setPlaybackMode: mode => set({ playbackMode: mode, navigation: setQueueShuffle(navigation(), mode === 'random') }),
+  cyclePlaybackMode: () => {
+    const modes: PlaybackMode[] = ['sequence', 'loop', 'random']
+    get().setPlaybackMode(modes[(modes.indexOf(get().playbackMode) + 1) % modes.length])
+  },
   setQuality: (q) => {
     set({ quality: q })
     // 切音质需重建 streamUrl（不同音质独立缓存键）
@@ -358,42 +378,22 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
   },
 
   next: () => {
-    // 插播队列优先：手动点"下一首"也先播"下一首播放"插进来的歌（Spotify 同款）
-    if (get().playNextQueue.length > 0) {
-      get().playFromPlayNext(0)
-      return
-    }
-    const { queue, currentIndex, playbackMode } = get()
-    if (queue.length === 0) return
-    let nextIndex: number
-    if (playbackMode === 'random' && queue.length > 1) {
-      nextIndex = Math.floor(Math.random() * queue.length)
-      if (nextIndex === currentIndex) nextIndex = (nextIndex + 1) % queue.length
-    } else {
-      nextIndex = (currentIndex + 1) % queue.length
-    }
-    const track = queue[nextIndex]
-    set({ currentIndex: nextIndex, currentTrack: track, isCurrentTempPlay: false, currentTime: 0, duration: initialDuration(track) })
-    get().loadStreamUrl(track)
-    reportPlayIfAuthed(track)
+    const current = navigation()
+    const next = nextQueueEntry(current)
+    if (next !== current) void activate(next)
   },
 
   previous: () => {
-    const { queue, currentIndex, currentTime, isCurrentTempPlay } = get()
-    if (queue.length === 0) return
+    const { currentTrack, currentTime } = get()
+    if (!currentTrack) return
     if (currentTime > 3) {
       get().seek(0)
       return
     }
-    // 插播中按上一首：回到主队列冻结游标处（插播前刚播的那首，LX 同款）
-    const prevIndex = isCurrentTempPlay
-      ? currentIndex
-      : (currentIndex - 1 + queue.length) % queue.length
-    if (prevIndex < 0 || prevIndex >= queue.length) return
-    const track = queue[prevIndex]
-    set({ currentIndex: prevIndex, currentTrack: track, isCurrentTempPlay: false, currentTime: 0, duration: initialDuration(track) })
-    get().loadStreamUrl(track)
-    reportPlayIfAuthed(track)
+    const current = navigation()
+    const previous = previousQueueEntry(current)
+    if (previous === current) get().seek(0)
+    else void activate(previous)
   },
 
   handleTrackEnd: () => {
@@ -402,78 +402,64 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
       get().playFromPlayNext(0)
       return
     }
-    const { playbackMode, queue, currentTrack } = get()
+    const { playbackMode, currentTrack } = get()
     if (playbackMode === 'loop' && currentTrack) {
       // 单曲/插播都可重播。保留实际音质，由独立请求触发 seek(0) + play()。
       set(s => ({ currentTime: 0, seekTarget: null, streamNonce: s.streamNonce + 1, isPlaying: true }))
       return
     }
-    if (queue.length === 0) return
-    // 列表循环与随机播放统一由 next() 选择下一首；队尾按取模回到首曲。
+    // 回退后的前进、插播与下一轮随机顺序统一交给队列控制模块。
     get().next()
   },
 
   /** 加入队列（Play Later 语义）：排到插播队列末尾，整体优先于主队列剩余歌曲。
    *  允许重复入队（Spotify/Apple/LX 一致），不做 uid 去重——去重会让列表内已存在的歌静默失效。 */
   addToQueue: (track) => {
-    set(s => ({ playNextQueue: [...s.playNextQueue, track] }))
+    set(projectPlaybackQueue(enqueueTrack(navigation(), track, false)))
     // 播放器空闲时直接开播用户刚操作的这首（LX addTempPlayList 同款）
     if (!get().currentTrack) get().playFromPlayNext(get().playNextQueue.length - 1)
   },
   /** 下一首播放（Play Next 语义）：插到插播队列最前，后点的先播（Apple 同款） */
   addNext: (track) => {
-    set(s => ({ playNextQueue: [track, ...s.playNextQueue] }))
+    set(projectPlaybackQueue(enqueueTrack(navigation(), track, true)))
     if (!get().currentTrack) get().playFromPlayNext(0)
   },
-  removeFromPlayNext: (index) =>
-    set(s => ({ playNextQueue: s.playNextQueue.filter((_, i) => i !== index) })),
-  clearPlayNext: () => set({ playNextQueue: [] }),
+  removeFromPlayNext: index => set(projectPlaybackQueue(removeManualEntry(navigation(), index))),
+  clearPlayNext: () => set(projectPlaybackQueue({ ...navigation(), manual: [] })),
   playFromPlayNext: (index) => {
-    const { playNextQueue } = get()
-    const track = playNextQueue[index]
-    if (!track) return
-    // 主队列 currentIndex 冻结不动：插播消费完毕后 next() 从冻结位置继续主队列
-    set({
-      playNextQueue: playNextQueue.filter((_, i) => i !== index),
-      currentTrack: track,
-      isCurrentTempPlay: true,
-      currentTime: 0,
-      duration: initialDuration(track),
-    })
-    get().loadStreamUrl(track)
-    reportPlayIfAuthed(track)
+    const current = navigation()
+    const next = playManualEntry(current, index)
+    if (next !== current) void activate(next)
   },
-  removeFromQueue: (index) =>
-    set(s => {
-      if (index < 0 || index >= s.queue.length) return {}
-      const newQueue = s.queue.filter((_, i) => i !== index)
-      if (index < s.currentIndex) {
-        return { queue: newQueue, currentIndex: s.currentIndex - 1 }
-      }
-      if (index === s.currentIndex) {
-        // 插播期间移除的是主队列冻结游标处的歌（并非正在播的曲）：只回退游标，不打断插播
-        if (s.isCurrentTempPlay) {
-          return { queue: newQueue, currentIndex: s.currentIndex - 1 }
-        }
-        // 移除当前曲目：清空播放状态（顺带修预存 bug——原实现留下指向已移除曲目的 streamUrl）
-        streamRequestId++
-        return {
-          queue: newQueue,
-          currentIndex: -1,
-          currentTrack: null,
-          effectiveQuality: null,
-          streamUrl: null,
-          isPlaying: false,
-          isFetchingUrl: false,
-          bufferProgress: null,
-        }
-      }
-      return { queue: newQueue }
-    }),
+  playFromQueue: index => {
+    const current = navigation()
+    const entry = current.entries[index]
+    if (entry) void activate(selectTrack(current, entry.track, undefined, index))
+  },
+  playFromFuture: index => {
+    const current = navigation()
+    const next = playFutureEntry(current, index)
+    if (next !== current) void activate(next)
+  },
+  removeFromFuture: index => {
+    const current = navigation()
+    set(projectPlaybackQueue({ ...current, future: current.future.filter((_, i) => i !== index) }))
+  },
+  removeFromQueue: index => {
+    const current = navigation()
+    const next = removeQueueEntry(current, index)
+    if (next === current) return
+    if (current.current && !next.current) {
+      streamRequestId++
+      set({ ...projectPlaybackQueue(next), effectiveQuality: null, streamUrl: null, isPlaying: false,
+        isFetchingUrl: false, bufferProgress: null, currentTime: 0, duration: 0, seekTarget: null })
+    } else set(projectPlaybackQueue(next))
+  },
   clearQueue: () => {
     streamRequestId++
     set({
       queue: [],
+      navigation: emptyPlaybackQueue(get().playbackMode === 'random'),
       playNextQueue: [],
       isCurrentTempPlay: false,
       currentIndex: -1,
@@ -516,7 +502,8 @@ export const usePlayerStore = create<PlayerStore>((set, get) => ({
     set({ sleepTimer: timer })
   },
   clearSleepTimer: () => get().setSleepTimer(null),
-}))
+  })
+})
 
 // 高频播放进度不触发偏好写入；字段白名单也避免把瞬时状态持久化。
 usePlayerStore.subscribe((state, previous) => {

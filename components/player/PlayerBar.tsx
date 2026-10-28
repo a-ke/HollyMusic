@@ -67,6 +67,7 @@ export function PlayerBar({ audio, onAudioElement, onOpenEqualizer }: PlayerBarP
     onPlayState: p => {
       if (isCurrentStream()) usePlayerStore.getState().setIsPlaying(p, { fromAudio: true })
     },
+    onPlaybackStarted: () => { if (isCurrentStream()) usePlayerStore.getState().markPlaybackStarted() },
     onEnd: () => { if (isCurrentStream()) usePlayerStore.getState().handleTrackEnd() },
     onLoading: pct => { if (isCurrentStream()) usePlayerStore.getState().setBufferProgress(pct) },
     onError: (msg, errCode, wasPlaying) => {

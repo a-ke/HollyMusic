@@ -767,6 +767,47 @@ describe('PC 与移动端共用播放器', () => {
     expect(audio.currentTime).toBe(0)
   })
 
+  it.each(['PC', '手机'])('%s 随机播放通过实际音频事件记录历史，重播后可回退并再次前进', async device => {
+    const songs = [track, second, makeTrack('third'), makeTrack('fourth')]
+    await act(async () => {
+      usePlayerStore.getState().setPlaybackMode('random')
+      await usePlayerStore.getState().playTrack(track, songs)
+    })
+    await ready()
+    if (device === '手机') await click(container.querySelector('button[aria-label="更多"]'))
+    const transport = (label: string) => device === '手机'
+      ? document.querySelector(`dialog button[aria-label="${label}"]`)
+      : container.querySelector(`button[aria-label="${label}"]`)
+    await click(transport('下一首'))
+    await ready()
+    const target = usePlayerStore.getState().currentTrack!
+    await act(async () => usePlayerStore.getState().seek(25))
+    await click(transport('上一首'))
+    expect(audio.currentTime).toBe(0)
+    expect(usePlayerStore.getState().currentTrack?.uid).toBe(target.uid)
+    await click(transport('上一首'))
+    await ready()
+    expect(usePlayerStore.getState().currentTrack?.uid).toBe(track.uid)
+    await click(transport('下一首'))
+    await ready()
+    expect(usePlayerStore.getState().currentTrack?.uid).toBe(target.uid)
+    expect(audio.src).toContain(target.uid)
+    expect(audio.paused).toBe(false)
+  })
+
+  it('只发出 play 尚未 playing 的歌曲不进入回退历史', async () => {
+    const third = makeTrack('third')
+    await act(async () => usePlayerStore.getState().playTrack(track, [track, second, third]))
+    await ready()
+    await act(async () => usePlayerStore.getState().next())
+    await act(async () => audio.dispatchEvent(new Event('play')))
+    await act(async () => usePlayerStore.getState().next())
+    await ready()
+    await act(async () => usePlayerStore.getState().previous())
+    await ready()
+    expect(usePlayerStore.getState().currentTrack?.uid).toBe(track.uid)
+  })
+
   it('单曲循环保持解码失败后实际降级的音质', async () => {
     await act(async () => {
       usePlayerStore.setState({ playbackMode: 'loop' })

@@ -27,6 +27,8 @@ interface UseAudioPlayerOptions {
   onTimeUpdate?: (t: number) => void
   onDuration?: (d: number) => void
   onPlayState?: (playing: boolean) => void
+  /** playing 确认音频已开始输出，play 仅代表播放请求已发出。 */
+  onPlaybackStarted?: () => void
   onEnd?: () => void
   /** 缓冲态变化：true=进入缓冲（waiting），false=可播放（canplay）；null=无缓冲态 */
   onLoading?: (percent: number | null) => void
@@ -186,6 +188,7 @@ export function useAudioPlayer(opts: UseAudioPlayerOptions) {
       // 所以这里必须也启动 rAF 循环，否则 seek 到未缓冲区恢复后进度条不动
       // 用户已点击暂停时，缓冲恢复仍可能冒出 playing 事件；不能把状态改回播放。
       if (playbackIntentRef.current !== 'playing') return
+      optsRef.current.onPlaybackStarted?.()
       optsRef.current.onPlayState?.(true)
       startProgress()
     }

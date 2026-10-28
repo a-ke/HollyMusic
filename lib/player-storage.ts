@@ -2,6 +2,7 @@ import { createBrowserStorage, isRecord, readStorageValue, type StorageArea } fr
 import { VALID_QUALITIES } from '@/lib/quality-options'
 import type { MusicInfo, QualityInfo, QualityType, SourceType } from '@/lib/types/music'
 import { toTrack, type PlaybackMode, type Track } from '@/lib/types/player'
+import { MAX_PLAYBACK_HISTORY, projectPlaybackQueue, restoreLegacyQueue, type PlaybackQueue, type PlaybackVisit, type QueueEntry } from '@/lib/player-queue'
 
 export interface PlayerPreferences {
   volume: number
@@ -18,6 +19,7 @@ export interface PlaybackSession {
   currentTrack: Track | null
   isCurrentTempPlay: boolean
   currentTime: number
+  navigation?: PlaybackQueue | null
 }
 
 export interface PlayerTabState {
@@ -133,8 +135,99 @@ function parseTabState(value: unknown): PlayerTabState | null {
   return { sleepTimer, isQueueOpen: value.isQueueOpen === true }
 }
 
+interface StoredVisit { id: string; mainId: string | null; started: boolean }
+interface StoredPlaybackSession {
+  catalog: QueueEntry[]
+  main: string[]
+  manual: string[]
+  past: StoredVisit[]
+  current: StoredVisit | null
+  future: StoredVisit[]
+  upcoming: string[]
+  shuffle: boolean
+  nextId: number
+  currentTime: number
+}
+
+function encodeSession(navigation: PlaybackQueue, currentTime: number): StoredPlaybackSession {
+  const visits = [...navigation.past, ...navigation.future, ...(navigation.current ? [navigation.current] : [])]
+  const catalog = new Map([...navigation.entries, ...navigation.manual, ...visits.map(visit => visit.entry)].map(entry => [entry.id, entry]))
+  const visit = (item: PlaybackVisit): StoredVisit => ({ id: item.entry.id, mainId: item.mainId, started: item.started })
+  return {
+    catalog: [...catalog.values()], main: navigation.entries.map(entry => entry.id), manual: navigation.manual.map(entry => entry.id),
+    past: navigation.past.map(visit), current: navigation.current ? visit(navigation.current) : null,
+    future: navigation.future.map(visit), upcoming: navigation.upcoming, shuffle: navigation.shuffle, nextId: navigation.nextId, currentTime,
+  }
+}
+
+/** 持久化按入队 ID 引用曲目，避免每次后退/重播都复制整份歌曲数据。 */
+function parseStoredSession(value: unknown): StoredPlaybackSession | null {
+  if (!isRecord(value) || !Array.isArray(value.catalog) || typeof value.shuffle !== 'boolean'
+    || typeof value.nextId !== 'number' || !Number.isSafeInteger(value.nextId) || value.nextId < 1) return null
+  const catalog = new Map<string, QueueEntry>()
+  for (const item of value.catalog) {
+    if (!isRecord(item) || typeof item.id !== 'string' || !/^[1-9]\d*$/.test(item.id)
+      || Number(item.id) >= value.nextId || catalog.has(item.id)) return null
+    const track = parseTrack(item.track)
+    if (!track) return null
+    catalog.set(item.id, { id: item.id, track })
+  }
+  const ids = (items: unknown, allowed: Set<string>): string[] | null => {
+    if (!Array.isArray(items) || items.some(id => typeof id !== 'string' || !allowed.has(id)) || new Set(items).size !== items.length) return null
+    return items
+  }
+  const main = ids(value.main, new Set(catalog.keys()))
+  const manual = ids(value.manual, new Set(catalog.keys()))
+  if (!main || !manual || manual.some(id => main.includes(id))) return null
+  const mainIds = new Set(main)
+  const pendingIds = new Set(manual)
+  const upcoming = ids(value.upcoming, mainIds)
+  if (!upcoming) return null
+  const visit = (item: unknown): StoredVisit | null => {
+    if (!isRecord(item) || typeof item.id !== 'string' || !catalog.has(item.id) || pendingIds.has(item.id)
+      || (item.mainId !== null && (typeof item.mainId !== 'string' || !mainIds.has(item.mainId)))
+      || (mainIds.has(item.id) && item.mainId !== item.id) || typeof item.started !== 'boolean') return null
+    return { id: item.id, mainId: item.mainId as string | null, started: item.started }
+  }
+  if (!Array.isArray(value.past) || !Array.isArray(value.future)
+    || value.past.length + value.future.length > MAX_PLAYBACK_HISTORY) return null
+  const past = value.past.map(visit)
+  const future = value.future.map(visit)
+  if ([...past, ...future].some(item => !item?.started)) return null
+  const current = value.current === null ? null : visit(value.current)
+  if (value.current !== null && !current) return null
+  const duration = current ? catalog.get(current.id)!.track.duration : 0
+  const time = current && typeof value.currentTime === 'number' && Number.isFinite(value.currentTime) ? Math.max(0, value.currentTime) : 0
+  return { catalog: [...catalog.values()], main, manual, past: past as StoredVisit[], future: future as StoredVisit[], current,
+    upcoming, shuffle: value.shuffle, nextId: value.nextId, currentTime: duration > 0 ? Math.min(time, duration) : time }
+}
+
 export function playbackSessionStorage(username: string, area: StorageArea = 'local') {
-  return createBrowserStorage(`holly-player-session:${encodeURIComponent(username)}`, parseSession, area)
+  const key = `holly-player-session:${encodeURIComponent(username)}`
+  const storage = createBrowserStorage(key, parseStoredSession, area, 2)
+  const legacy = createBrowserStorage(key, parseSession, area)
+  return {
+    key,
+    read(): PlaybackSession | null {
+      const stored = storage.read()
+      if (!stored) return legacy.read()
+      const catalog = new Map(stored.catalog.map(entry => [entry.id, entry]))
+      const visit = (item: StoredVisit): PlaybackVisit => ({ entry: catalog.get(item.id)!, mainId: item.mainId, started: item.started })
+      const navigation: PlaybackQueue = {
+        entries: stored.main.map(id => catalog.get(id)!), manual: stored.manual.map(id => catalog.get(id)!),
+        past: stored.past.map(visit), current: stored.current ? visit(stored.current) : null, future: stored.future.map(visit),
+        upcoming: stored.upcoming, shuffle: stored.shuffle, nextId: stored.nextId,
+      }
+      return { ...projectPlaybackQueue(navigation), currentTime: stored.currentTime }
+    },
+    write(session: PlaybackSession): boolean {
+      const validated = session.navigation ? session : parseSession(session)
+      if (!validated) return false
+      const navigation = validated.navigation ?? restoreLegacyQueue(validated, loadPlayerPreferences().playbackMode)
+      return storage.write(encodeSession(navigation, session.currentTime))
+    },
+    remove: storage.remove,
+  }
 }
 
 export function playerTabStorage(username: string) {
